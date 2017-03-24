@@ -3,8 +3,8 @@ import os
 
 cwd = os.getcwd()
 cwd = os.path.abspath(cwd)
-pypath = os.environ['PYTHONPATH']
 
+#pypath = os.environ['PYTHONPATH']
 #if not cwd in pypath:
 #    os.environ['PYTHONPATH'] = pypath + ':%s' % cwd
 #    print "Extended python path:", os.environ['PYTHONPATH']
