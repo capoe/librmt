@@ -1,0 +1,24 @@
+from external.soap.soapy.momo import ExtendableNamespace
+
+class Pipe(object):
+    def __init__(self, label=""):
+        self.label = label
+        self.sequence = []
+        self.tags = []
+        return
+    def push(self, fct, tag=""):
+        self.sequence.append(fct)
+        self.tags.append(tag)
+        return
+    def execute(self, state, options, logger):
+        logger << logger.mb << "Entering pipe '%s' ..." % self.label << logger.endl
+        output = []
+        for fct, tag in zip(self.sequence, self.tags):
+            out = fct(state, options, logger)
+            if type(out) == tuple and len(out) == 2: # (state, res)
+                res = ExtendableNamespace()
+                res.tag = tag
+                res.res = out[1]
+                output.append(res)
+        logger << logger.mb << "Leaving pipe '%s' ..." % self.label << logger.endl
+        return output

@@ -9,10 +9,12 @@ import os
 import numpy.linalg as la
 import scipy.integrate
 import copy
+import csv
 # Internal libraries
 import ising as ising
 import nonlinear as nonlinear
 from state import State
+from pipe import Pipe
 # External libraries
 from sklearn import linear_model
 from rdkit.Chem import AllChem as chem
@@ -32,26 +34,106 @@ except ImportError:
 # ==========
 
 def load_configs(state, options, log):
+    log.prefix = '[load] '
     if "load_configs" in options:
         options = options["load_configs"]
     method = options['load_method']
+    log.prefix = ''
     return load_configs_factory[method](state, options[method], log)
 
+def load_pairs(state, options, log):
+    log.prefix = '[load] '
+    log << log.mg << "Loading pairs from initial configurations ..." << log.endl
+    if "load_pairs" in options:
+        options = options["load_pairs"]
+    n_dim_in = state["n_dim"]
+    n_dim_out = 2*n_dim_in
+    n_samples_in = state["n_samples"]
+    # CREATE LABEL-TO-IDX MAP
+    idx_map = { }
+    for i in range(state["n_samples"]):
+        label = state["labels"][i]["label"]
+        idx_map[label] = i
+    # READ PAIR DATA
+    csv_file = options["pair_table"]
+    ifs = open(csv_file, 'r')
+    reader = csv.DictReader(ifs, delimiter=',', quotechar='"')
+    pairs = []
+    IX_out = []
+    labels_out = []
+    configs_out = []
+    for row in reader:
+        l1, l2 = row['pair'].split(':')
+        i1, i2 = idx_map[l1], idx_map[l2]
+        info = { key:row[key] for key in row }
+        info["pair-label-a"] = state["labels"][i1]
+        info["pair-label-b"] = state["labels"][i2]
+        # SYMMETRISE & COMBINE DESCRIPTORS
+        x1, x2 = state["IX"][i1], state["IX"][i2]
+        x_sym_p = 0.5*(x1+x2)
+        x_sym_m = 0.5*np.abs(x1-x2)
+        x = np.zeros((n_dim_out,), dtype=state["IX"].dtype)
+        x[0:n_dim_in] = x_sym_p
+        x[n_dim_in:n_dim_out] = x_sym_m
+        IX_out.append(x)
+        # GENERATE PAIR LABELS AND CONFIG
+        labels_out.append(info)
+        pair_config = soap.soapy.momo.ExtendableNamespace()
+        pair_config.a = state["configs"][i1]
+        pair_config.b = state["configs"][i2]
+        pair_config.info = info
+        configs_out.append(pair_config)
+        #print x1, x2
+        #print x
+        #print x1.sum()
+        #print x2.sum()
+        #print x.sum()
+        #print labels_out[-1]
+        #raw_input('...')
+    IX_out = np.array(IX_out)
+    n_samples_out = IX_out.shape[0]
+    ifs.close()
+    # SAVE STATE
+    log << "# pairs:" << n_samples_out << log.endl
+    log << "Pair descriptor dimension:" << n_dim_out << log.endl
+    state.register("load_pairs", options)
+    state["configs"] = configs_out
+    state["labels"] = labels_out
+    state["IX"] = IX_out
+    state["n_samples"] = n_samples_out
+    state["n_dim"] = n_dim_out
+    return state
+
+
 def load_configs_extended_xyz(state, options, log):
+    """
+    # INPUT
+      - Extended xyz
+    # OUTPUT
+      - state['configs']
+      - state['labels']
+    """
+    log.prefix = '[load] '
     log << log.mg << "Load configurations <load_configs_extended_xyz> ..." << log.endl
     xyz_file = options["xyz_file"]
     n_select = options["n_select"]
     subsample_method = options["subsample_method"]
     filter_types = options["filter_types"]
     types = options["types"]
+    if "rm_duplicates" in options:
+        rm_dupls = options["rm_duplicates"]
+        rm_dupls_fct = options["rm_duplicates_decision_fct"]
+    else:
+        rm_dupls = True
+        rm_dupls_fct = lambda c: c.info['label']
     # READ & FILTER
     configs_A = read_filter_configs(
         xyz_file,
         index=':',
         filter_types=filter_types,
         types=types,
-        do_remove_duplicates=True,
-        key=lambda c: c.info['label'],
+        do_remove_duplicates=rm_dupls,
+        key=rm_dupls_fct,
         log=log)
     configs_A, configs_A2 = soap.soapy.learn.subsample_array(
         configs_A, n_select=n_select, method=subsample_method, stride_shift=0)
@@ -127,6 +209,7 @@ def remove_duplicates(array, key=lambda a: a):
 # =======
 
 def load_targets(state, options, log):
+    log.prefix = '[targ] '
     if 'load_targets' in options:
         options = options['load_targets']
     log << log.mg << "Load targets" << log.endl
@@ -137,9 +220,11 @@ def load_targets(state, options, log):
     log << "sqrt<dt^2>" << np.std(T) << log.endl
     state.register("load_targets", options)
     state["T"] = T
+    log.prefix = ''
     return state
 
 def normalise_targets(state, options, log):
+    log.prefix = '[targ] '
     if 'normalise_targets' in options:
         options = options['normalise_targets']
     log << log.mg << "Normalise targets" << log.endl
@@ -163,6 +248,7 @@ def normalise_targets(state, options, log):
     log << "<t_train>" << np.average(T_train) << np.std(T_train) << log.endl
     log << "<t_test>" << np.average(T_test) << np.std(T_test) << log.endl
     log << "t_average" << T_train_avg << log.endl
+    log.prefix = ''
     return state
 
 # ===========
@@ -170,10 +256,13 @@ def normalise_targets(state, options, log):
 # ===========
 
 def compute_descriptor(state, options, log):
+    log.prefix = '[dtor] '
     if "compute_descriptor" in options:
         options = options["compute_descriptor"]
     method = options["descriptor_method"]
-    return compute_descriptor_factory[method](state, options[method], log)
+    state = compute_descriptor_factory[method](state, options[method], log)
+    log.prefix = ''
+    return state
 
 def compute_descriptor_morgan(state, options, log):
     log << log.mg << "Compute descriptor <compute_descriptor_morgan> ..." << log.endl
@@ -207,6 +296,7 @@ def compute_soap(state, options, log):
     return None
 
 def upconvert_descriptor(state, options, log):
+    log.prefix = '[dtor] '
     if "upconvert_descriptor" in options:
         options = options["upconvert_descriptor"]
     log << options << log.endl
@@ -258,7 +348,9 @@ def upconvert_descriptor(state, options, log):
     state["IX_train"] = IX_train_full
     state["IX_test"] = IX_test_full
     state["n_dim"] = n_dim_full
+    state["mp_gamma"] = float(n_dim_full)/n_train
     log << "New descriptor dimension:" << n_dim_full << log.endl
+    log.prefix = ''
     return state
 
 # =============
@@ -266,6 +358,7 @@ def upconvert_descriptor(state, options, log):
 # =============
 
 def feature_select(state, options, log):
+    log.prefix = '[dtor] '
     if "feature_select" in options:
         options = options["feature_select"]
     method = options["method"]
@@ -286,9 +379,11 @@ def feature_select(state, options, log):
     state.register("feature_select", options)
     state["n_dim"] = descriptor_dim
     state["mp_gamma"] = mp_gamma
+    log.prefix = ''
     return state
 
 def clean_descriptor_matrix(state, options, log):
+    log.prefix = '[dtor] '
     if 'clean_descriptor_matrix' in options:
         options = options['clean_descriptor_matrix']
     std_threshold = options["std_threshold"]
@@ -306,9 +401,11 @@ def clean_descriptor_matrix(state, options, log):
     state.register("clean_descriptor_matrix", options)
     state["n_dim"] = descriptor_dim
     state["mp_gamma"] = mp_gamma
+    log.prefix = ''
     return state
 
 def clean_descriptor_pca(state, options, log):
+    log.prefix = '[dtor] '
     if 'clean_descriptor_pca' in options:
         options = options['clean_descriptor_pca']
     log << log.mg << "Transform descriptor <clean_descriptor_pca>" << log.endl
@@ -321,6 +418,8 @@ def clean_descriptor_pca(state, options, log):
     IX_train = state["IX_train"]
     IX_test = state["IX_test"]
     mp_gamma = state["mp_gamma"]
+    log << "gamma_mp = D/N =" <<  mp_gamma << log.endl
+    assert mp_gamma == float(state["n_dim"])/state["n_train"]
     # Z-SCORE PCA
     IX_train_norm_pca, IZ, X_mean, X_std, S, L, V = pca_compute(
         IX=IX_train,
@@ -382,6 +481,7 @@ def clean_descriptor_pca(state, options, log):
     state["IX_test"] = IZ_pc_signal_test
     state["n_dim_mp_signal"] = n_dim_mp_signal
     state["n_dim"] = IZ_pc_signal_train.shape[1]
+    log.prefix = ''
     return state
 
 def dist_mp(x, gamma):
@@ -467,6 +567,7 @@ def pca_compute(IX, log=None, norm_div_std=True, norm_sub_mean=True, ddof=1, eps
 # ========
 
 def split_test_train(state, options, log):
+    log.prefix = '[pred] '
     if 'split_test_train' in options:
         options = options['split_test_train']
     log << log.mg << "Split onto training and test set" << log.endl
@@ -480,8 +581,20 @@ def split_test_train(state, options, log):
     n_samples = state["n_samples"]
     n_train = int(f_train*n_samples+0.5)
     n_test = n_samples - n_train
-    idcs_train, idcs_test = soap.soapy.learn.subsample_array(
-        np.arange(0, n_samples).tolist(), n_select=n_train, method=subsample_method, stride_shift=0)
+    # Use decision fct?
+    if "decision_fct" in options and options["decision_fct"] != None:
+        log << "Using decision function" << log.endl
+        dfct = options["decision_fct"]
+        idcs_test = []
+        idcs_train = []
+        for idx, config in enumerate(state["configs"]):
+            if dfct(config):
+                idcs_test.append(idx)
+            else: idcs_train.append(idx)
+    else:
+        # Subsampling
+        idcs_train, idcs_test = soap.soapy.learn.subsample_array(
+            np.arange(0, n_samples).tolist(), n_select=n_train, method=subsample_method, stride_shift=0)
     # Train
     n_train = len(idcs_train)
     IX_train = IX[idcs_train]
@@ -507,9 +620,14 @@ def split_test_train(state, options, log):
     state["T_test"] = T_test
     state["labels_test"] = labels_test
     state["mp_gamma"] = mp_gamma # Note that this gamma applies to the uncleaned dataset
+    log.prefix = ''
     return state
 
 def learn(state, options, log, verbose=False):
+    adapt_prefix = False
+    if log.prefix != '[pred] ':
+        log.prefix = '[pred] '
+        adapt_prefix = True
     if 'learn' in options:
         options = options['learn']
     method = options['method']
@@ -535,10 +653,14 @@ def learn(state, options, log, verbose=False):
     res = {
         'T_train_pred': T_train_pred,
         'T_test_pred': T_test_pred,
+        'T_train': np.copy(state["T_train"]),
+        'T_test': np.copy(state["T_test"]),
         'rmse_train': rmse_train,
         'rmse_test': rmse_test,
         'model': regr
     }
+    if adapt_prefix:
+        log.prefix = ''
     return state, res
 
 def apply_parameter(options, path, value):
@@ -551,9 +673,10 @@ def apply_parameter(options, path, value):
     return options
 
 def learn_optimal(state, options, log, verbose=False):
+    log.prefix = '[pred] '
     path = options['learn_optimal']['path']
     values = options['learn_optimal']['values']
-    log << "Grid learning: " << path << values << log.endl
+    log << "Grid search: " << path << values << log.endl
     v_res = []
     out = []
     for v in values:
@@ -564,7 +687,53 @@ def learn_optimal(state, options, log, verbose=False):
         v_res.append([v, res])
     out = sorted(out, key=lambda o: o[1]["rmse_test"])
     out[0][1]["value_res"] = v_res
+    log.prefix = ''
     return state, out[0][1]
+
+def learn_repeat_aggregate(state, options, log, verbose=False):
+    # Options
+    n_reps = options["learn_repeat_aggregate"]["repetitions"]
+    model = options["learn_repeat_aggregate"]["pipe"]
+    assert n_reps > 0
+    # Execute model n_rep times
+    out = []
+    for i in range(n_reps):
+        state_clone = state.clone()
+        model_out = model.execute(state_clone, options, log)
+        out.append(model_out)
+    # Aggregate
+    res_agg = []
+    n_channels = len(out[0])
+    for c in range(n_channels):
+        tag = out[0][c].tag
+        T_train = []
+        T_test = []
+        T_train_pred = []       
+        T_test_pred = []
+        for i in range(n_reps):
+            r = out[i][c].res # repetition->channel->result
+            T_train = T_train + list(r["T_train"])
+            T_test = T_test + list(r["T_test"])
+            T_train_pred = T_train_pred + list(r["T_train_pred"])
+            T_test_pred = T_test_pred + list(r["T_test_pred"])
+        T_train = np.array(T_train)
+        T_test = np.array(T_test)
+        T_train_pred = np.array(T_train_pred)
+        T_test_pred = np.array(T_test_pred)
+        rmse_train = np.average((T_train-T_train_pred)**2)**0.5
+        rmse_test = np.average((T_test-T_test_pred)**2)**0.5
+        res = soap.soapy.momo.ExtendableNamespace()
+        res.tag = tag
+        res.res = { 
+            "T_train": T_train, 
+            "T_test": T_test, 
+            "T_train_pred": T_train_pred, 
+            "T_test_pred": T_test_pred, 
+            "rmse_train": rmse_train, 
+            "rmse_test": rmse_test 
+        }
+        res_agg.append(res)
+    return state, res_agg
 
 # =========
 # FACTORIES

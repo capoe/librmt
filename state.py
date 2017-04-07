@@ -20,6 +20,8 @@ class State(object):
     def register(self, stamp, options):
         self.history.append((stamp, options))
         return
+    def keys(self):
+        return self.state.keys()
     def store(self, key, value):
         self.storage[key] = value
         return
