@@ -34,15 +34,15 @@ except ImportError:
 # ==========
 
 def load_configs(state, options, log):
-    log.prefix = '[load] '
+    log.prefix += '[load] '
     if "load_configs" in options:
         options = options["load_configs"]
     method = options['load_method']
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return load_configs_factory[method](state, options[method], log)
 
 def load_pairs(state, options, log):
-    log.prefix = '[load] '
+    log.prefix += '[load] '
     log << log.mg << "Loading pairs from initial configurations ..." << log.endl
     if "load_pairs" in options:
         options = options["load_pairs"]
@@ -102,6 +102,7 @@ def load_pairs(state, options, log):
     state["IX"] = IX_out
     state["n_samples"] = n_samples_out
     state["n_dim"] = n_dim_out
+    log.prefix = log.prefix[0:-7]
     return state
 
 
@@ -113,7 +114,7 @@ def load_configs_extended_xyz(state, options, log):
       - state['configs']
       - state['labels']
     """
-    log.prefix = '[load] '
+    log.prefix += '[load] '
     log << log.mg << "Load configurations <load_configs_extended_xyz> ..." << log.endl
     xyz_file = options["xyz_file"]
     n_select = options["n_select"]
@@ -156,6 +157,7 @@ def load_configs_extended_xyz(state, options, log):
     state["configs"] = configs
     state["labels"] = labels
     state.store("types_global", types_global)
+    log.prefix = log.prefix[0:-7]
     return state
 
 def read_filter_configs(
@@ -209,7 +211,7 @@ def remove_duplicates(array, key=lambda a: a):
 # =======
 
 def load_targets(state, options, log):
-    log.prefix = '[targ] '
+    log.prefix += '[targ] '
     if 'load_targets' in options:
         options = options['load_targets']
     log << log.mg << "Load targets" << log.endl
@@ -220,11 +222,11 @@ def load_targets(state, options, log):
     log << "sqrt<dt^2>" << np.std(T) << log.endl
     state.register("load_targets", options)
     state["T"] = T
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 def normalise_targets(state, options, log):
-    log.prefix = '[targ] '
+    log.prefix += '[targ] '
     if 'normalise_targets' in options:
         options = options['normalise_targets']
     log << log.mg << "Normalise targets" << log.endl
@@ -248,7 +250,7 @@ def normalise_targets(state, options, log):
     log << "<t_train>" << np.average(T_train) << np.std(T_train) << log.endl
     log << "<t_test>" << np.average(T_test) << np.std(T_test) << log.endl
     log << "t_average" << T_train_avg << log.endl
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 # ===========
@@ -256,12 +258,12 @@ def normalise_targets(state, options, log):
 # ===========
 
 def compute_descriptor(state, options, log):
-    log.prefix = '[dtor] '
+    log.prefix += '[dtor] '
     if "compute_descriptor" in options:
         options = options["compute_descriptor"]
     method = options["descriptor_method"]
     state = compute_descriptor_factory[method](state, options[method], log)
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 def compute_descriptor_morgan(state, options, log):
@@ -296,7 +298,7 @@ def compute_soap(state, options, log):
     return None
 
 def upconvert_descriptor(state, options, log):
-    log.prefix = '[dtor] '
+    log.prefix += '[dtor] '
     if "upconvert_descriptor" in options:
         options = options["upconvert_descriptor"]
     log << options << log.endl
@@ -350,7 +352,7 @@ def upconvert_descriptor(state, options, log):
     state["n_dim"] = n_dim_full
     state["mp_gamma"] = float(n_dim_full)/n_train
     log << "New descriptor dimension:" << n_dim_full << log.endl
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 # =============
@@ -358,7 +360,7 @@ def upconvert_descriptor(state, options, log):
 # =============
 
 def feature_select(state, options, log):
-    log.prefix = '[dtor] '
+    log.prefix += '[dtor] '
     if "feature_select" in options:
         options = options["feature_select"]
     method = options["method"]
@@ -379,11 +381,11 @@ def feature_select(state, options, log):
     state.register("feature_select", options)
     state["n_dim"] = descriptor_dim
     state["mp_gamma"] = mp_gamma
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 def clean_descriptor_matrix(state, options, log):
-    log.prefix = '[dtor] '
+    log.prefix += '[dtor] '
     if 'clean_descriptor_matrix' in options:
         options = options['clean_descriptor_matrix']
     std_threshold = options["std_threshold"]
@@ -401,11 +403,11 @@ def clean_descriptor_matrix(state, options, log):
     state.register("clean_descriptor_matrix", options)
     state["n_dim"] = descriptor_dim
     state["mp_gamma"] = mp_gamma
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 def clean_descriptor_pca(state, options, log):
-    log.prefix = '[dtor] '
+    log.prefix += '[dtor] '
     if 'clean_descriptor_pca' in options:
         options = options['clean_descriptor_pca']
     log << log.mg << "Transform descriptor <clean_descriptor_pca>" << log.endl
@@ -481,7 +483,7 @@ def clean_descriptor_pca(state, options, log):
     state["IX_test"] = IZ_pc_signal_test
     state["n_dim_mp_signal"] = n_dim_mp_signal
     state["n_dim"] = IZ_pc_signal_train.shape[1]
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 def dist_mp(x, gamma):
@@ -567,7 +569,7 @@ def pca_compute(IX, log=None, norm_div_std=True, norm_sub_mean=True, ddof=1, eps
 # ========
 
 def split_test_train(state, options, log):
-    log.prefix = '[pred] '
+    log.prefix += '[pred] '
     if 'split_test_train' in options:
         options = options['split_test_train']
     log << log.mg << "Split onto training and test set" << log.endl
@@ -620,14 +622,11 @@ def split_test_train(state, options, log):
     state["T_test"] = T_test
     state["labels_test"] = labels_test
     state["mp_gamma"] = mp_gamma # Note that this gamma applies to the uncleaned dataset
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state
 
 def learn(state, options, log, verbose=False):
-    adapt_prefix = False
-    if log.prefix != '[pred] ':
-        log.prefix = '[pred] '
-        adapt_prefix = True
+    log.prefix += '[pred] '
     if 'learn' in options:
         options = options['learn']
     method = options['method']
@@ -657,10 +656,13 @@ def learn(state, options, log, verbose=False):
         'T_test': np.copy(state["T_test"]),
         'rmse_train': rmse_train,
         'rmse_test': rmse_test,
-        'model': regr
+        'model': regr,
+        'n_train': n_train,
+        'n_test': n_test,
+        'std_data_train': np.std(state["T_train"]),
+        'std_data_test': np.std(state["T_test"])
     }
-    if adapt_prefix:
-        log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state, res
 
 def apply_parameter(options, path, value):
@@ -673,7 +675,7 @@ def apply_parameter(options, path, value):
     return options
 
 def learn_optimal(state, options, log, verbose=False):
-    log.prefix = '[pred] '
+    log.prefix += '[scan] '
     path = options['learn_optimal']['path']
     values = options['learn_optimal']['values']
     log << "Grid search: " << path << values << log.endl
@@ -687,10 +689,11 @@ def learn_optimal(state, options, log, verbose=False):
         v_res.append([v, res])
     out = sorted(out, key=lambda o: o[1]["rmse_test"])
     out[0][1]["value_res"] = v_res
-    log.prefix = ''
+    log.prefix = log.prefix[0:-7]
     return state, out[0][1]
 
 def learn_repeat_aggregate(state, options, log, verbose=False):
+    log.prefix += '[aggr] '
     # Options
     n_reps = options["learn_repeat_aggregate"]["repetitions"]
     model = options["learn_repeat_aggregate"]["pipe"]
@@ -716,6 +719,8 @@ def learn_repeat_aggregate(state, options, log, verbose=False):
             T_test = T_test + list(r["T_test"])
             T_train_pred = T_train_pred + list(r["T_train_pred"])
             T_test_pred = T_test_pred + list(r["T_test_pred"])
+            n_train = r["T_train"].shape[0]
+            n_test = r["T_test"].shape[0]
         T_train = np.array(T_train)
         T_test = np.array(T_test)
         T_train_pred = np.array(T_train_pred)
@@ -730,9 +735,16 @@ def learn_repeat_aggregate(state, options, log, verbose=False):
             "T_train_pred": T_train_pred, 
             "T_test_pred": T_test_pred, 
             "rmse_train": rmse_train, 
-            "rmse_test": rmse_test 
+            "rmse_test": rmse_test,
+            'std_data_train': np.std(T_train),
+            'std_data_test': np.std(T_test),
+            'n_train': n_train,
+            'n_test': n_test,
+            'n_train_pred_total': T_train.shape[0],
+            'n_test_pred_total': T_test.shape[0]
         }
         res_agg.append(res)
+    log.prefix = log.prefix[0:-7]
     return state, res_agg
 
 # =========
