@@ -206,9 +206,77 @@ def remove_duplicates(array, key=lambda a: a):
     len_out = len(array_curated)
     return array_curated, array_duplicates
 
+def import_hdf5(state, options, log):
+    log.prefix += '[load] '
+    if "import_hdf5" in options:
+        options = options["import_hdf5"]
+    hdf5_file = options["hdf5_file"]
+    filter_fct = options["filter"]
+    # Open hdf5
+    f = h5py.File(hdf5_file, 'r')
+    # Data arrays: labels, targets, kernel
+    log << log.mg << "Importing data from hdf5 '%s'" % hdf5_file << log.endl
+    labels = f['labels']['label_mat'].value
+    T = labels['target-value']
+    K = f['kernel']['kernel_mat'].value
+    # Filter if requested
+    idcs = []
+    if filter_fct:
+        log << "Filtering ..." << log.endl
+        for i in range(labels.shape[0]):
+            if filter_fct(labels[i]):
+                idcs.append(i)
+            else: pass
+    labels = labels[idcs]
+    T = T[idcs]
+    K = K[idcs][:,idcs]
+    # Create configs from labels
+    configs = []
+    n_samples = labels.shape[0]
+    log << "Generating %d configurations from labels" % n_samples << log.endl
+    fields = labels.dtype.names
+    for i in range(n_samples):
+        config = soap.soapy.momo.ExtendableNamespace()
+        config.info = {}
+        for field in fields:
+            config.info[field] = labels[field][i]
+        configs.append(config)
+    # Push data
+    state["configs"] = configs
+    state["labels"] = labels
+    state["has_K"] = True
+    state["K"] = K
+    state["IX"] = np.copy(K) # TODO Fix this: has_IX flag?
+    # Close hdf5 and return
+    f.close()
+    log.prefix = log.prefix[:-7]
+    return state
+
 # =======
 # TARGETS
 # =======
+
+def load_labels(state, options, log):
+    log.prefix += '[labl] '
+    if 'load_labels' in options:
+        options = options['load_labels']
+    log << log.mg << "Load labels" << log.endl
+    key = options['label_key']
+    fct = options['label_conv_fct']
+    L = [ fct(config.info[key]) for config in state["configs"] ]
+    label_map = { l: idx for idx, l in enumerate( sorted(list(set(L))) ) }
+    idx_to_label_map = { idx: l for idx, l in enumerate( sorted(list(set(L))) ) }
+    L = np.array([ label_map[l] for l in L ])
+    for l in label_map:
+        log << "Label '%s' -> '%d' : %d samples" % (
+            l, label_map[l], np.where(L == label_map[l])[0].shape[0]) << log.endl
+    state.register("load_labels", options)
+    state["L"] = L
+    state["has_L"] = True
+    state["label_to_idx_map"] = label_map
+    state["idx_to_label_map"] = idx_to_label_map
+    log.prefix = log.prefix[0:-7]
+    return state
 
 def load_targets(state, options, log):
     log.prefix += '[targ] '
@@ -222,6 +290,7 @@ def load_targets(state, options, log):
     log << "sqrt<dt^2>" << np.std(T) << log.endl
     state.register("load_targets", options)
     state["T"] = T
+    state["has_T"] = True
     log.prefix = log.prefix[0:-7]
     return state
 
@@ -406,6 +475,113 @@ def clean_descriptor_matrix(state, options, log):
     log.prefix = log.prefix[0:-7]
     return state
 
+def clean_descriptor_pca_by_class(state, options, log):
+    log.prefix += '[pca+] '
+    log << log.mg << "Running multimodal PCA" << log.endl
+    # OPTIONS
+    if 'clean_descriptor_pca_by_class' in options:
+        options = options['clean_descriptor_pca_by_class']
+    dec_fcts = options["decision_fcts"]
+    n_classes = len(dec_fcts)
+    verbose = False
+    # ... pca-related
+    select_pc_method = options["select_pc_method"]
+    n_select = options["n_select"]
+    norm_std = options["norm_std"]
+    norm_avg = options["norm_avg"]
+    # PARTITION ONTO CLASSES
+    T_train = state["T_train"]
+    idcs_classes = []
+    for i in range(n_classes):
+        dec_fct = dec_fcts[i]
+        idcs = []
+        for j in range(T_train.shape[0]):
+            if dec_fct(T_train[j]):
+                idcs.append(j)
+            else: pass
+        idcs_classes.append(idcs)
+    # PERFORM PCA FOR EACH CLASS
+    n_dim_cum = 0
+    pca_props = []
+    for class_idx, idcs in enumerate(idcs_classes):
+        IX_train = state["IX_train"][idcs]
+        T_train = state["T_train"][idcs]
+        if verbose: log << T_train << log.endl
+        n_dim = IX_train.shape[1]
+        n_train_class = len(idcs)
+        mp_gamma_class = float(n_dim)/n_train_class
+        # Z-SCORE PCA
+        IX_train_norm_pca, IZ, X_mean, X_std, S, L, V = pca_compute(
+            IX=IX_train,
+            log=None,
+            norm_div_std=norm_std,
+            norm_sub_mean=norm_avg,
+            eps=0.,
+            ddof=1)
+        # DECOMPOSE INTO NOISE + SIGNAL
+        n_dim_mp_signal = np.where( L.diagonal() > dist_mp_bounds(mp_gamma_class)[1] )[0].shape[0]
+        if select_pc_method == "mp":
+            if verbose: log << "Select MP signal ..." << log.endl
+            idcs_eigen_signal = np.where( L.diagonal() > dist_mp_bounds(mp_gamma_class)[1] )[0]
+            L_signal = L.diagonal()[idcs_eigen_signal]
+            V_signal = V[:,idcs_eigen_signal]
+            if verbose: log << "Components above MP threshold:" << len(idcs_eigen_signal) << log.endl
+        elif select_pc_method == "n_largest":
+            if n_select < 0:
+                threshold = L.diagonal()[0]-1.
+            else:
+                threshold = L.diagonal()[-n_select-1]
+            if verbose: log << "Select n =" << n_select << "largest ..." << log.endl
+            if verbose: log << "Threshold:" << threshold << log.endl
+            idcs_eigen_signal = np.where( L.diagonal() > threshold )[0]
+            L_signal = L.diagonal()[idcs_eigen_signal]
+            V_signal = V[:,idcs_eigen_signal]
+        else: raise NotImplementedError(select_pc_method)
+        log << "Class idx %d: %4d training samples, %2d signal components" % (
+            class_idx, n_train_class, V_signal.shape[1]) << log.endl
+        pca_props.append([X_mean, X_std, V_signal, L_signal, n_dim_cum, n_dim_cum+V_signal.shape[1]])
+        n_dim_cum += V_signal.shape[1]
+    n_dim_mp_signal = n_dim_cum
+    V_signal_all = np.zeros((state["IX_train"].shape[1], n_dim_cum), dtype='float64')
+    L_signal_all = np.zeros((n_dim_cum,), dtype='float64')
+    IZ_pc_signal_train = np.zeros((state["IX_train"].shape[0], n_dim_cum), dtype='float64')
+    IZ_pc_signal_test = np.zeros((state["IX_test"].shape[0], n_dim_cum), dtype='float64')
+    for i in range(n_classes):
+        props = pca_props[i]
+        X_mean = props[0]
+        X_std = props[1]
+        V_signal = props[2]
+        L_signal = props[3]
+        i0 = props[4]
+        i1 = props[5]
+        V_signal_all[:,i0:i1] = V_signal
+        L_signal_all[i0:i1] = L_signal
+        # Normalise & project
+        IZ_train = div0(state["IX_train"] - X_mean, X_std)
+        IZ_test = div0(state["IX_test"] - X_mean, X_std)
+        IZ_pc_signal_train_class = IZ_train.dot(V_signal)
+        IZ_pc_signal_test_class = IZ_test.dot(V_signal)
+        # Store in "super"-descriptor
+        log << "Projection for class %d, components %d:%d" % (i, i0, i1) << log.endl
+        IZ_pc_signal_train[:,i0:i1] = IZ_pc_signal_train_class
+        IZ_pc_signal_test[:,i0:i1] = IZ_pc_signal_test_class
+    np.set_printoptions(precision=1)
+    # Inspect PC vector overlap between classes
+    #print L_signal_all
+    #k = V_signal_all.T.dot(V_signal_all)
+    #np.savetxt('tmp.txt', k)
+    # Register
+    state.register("clean_descriptor_pca", options)
+    state["pca_params"] = pca_props
+    state["pca_V_signal"] = V_signal_all
+    state["pca_L_signal"] = L_signal_all
+    state["IX_train"] = IZ_pc_signal_train # transformed coordinates
+    state["IX_test"] = IZ_pc_signal_test
+    state["n_dim"] = IZ_pc_signal_train.shape[1]
+    state["mp_gamma"] = float(state["IX_train"].shape[1])/state["IX_train"].shape[0]
+    log.prefix = log.prefix[0:-7]
+    return state 
+
 def clean_descriptor_pca(state, options, log):
     log.prefix += '[dtor] '
     if 'clean_descriptor_pca' in options:
@@ -580,7 +756,7 @@ def split_test_train(state, options, log):
     IX = state["IX"]
     T = state["T"]
     labels = state["labels"]
-    n_samples = state["n_samples"]
+    n_samples = IX.shape[0]
     n_train = int(f_train*n_samples+0.5)
     n_test = n_samples - n_train
     # Use decision fct?
@@ -597,14 +773,27 @@ def split_test_train(state, options, log):
         # Subsampling
         idcs_train, idcs_test = soap.soapy.learn.subsample_array(
             np.arange(0, n_samples).tolist(), n_select=n_train, method=subsample_method, stride_shift=0)
-    # Train
     n_train = len(idcs_train)
+    n_test = len(idcs_test)
+    # Train
     IX_train = IX[idcs_train]
     T_train = T[idcs_train]
     labels_train = [ labels[i] for i in idcs_train ]
     mp_gamma = float(IX_train.shape[1])/n_train
+    if state["has_L"]:
+        L = state["L"]
+        L_train = L[idcs_train]
+        L_test = L[idcs_test]
+        #if len(list(set(list(L_train)))) != len(list(set(list(L_test)))):
+        #    print L_train
+        #    print L_test
+        #    assert False # Not all classes present in train and test
+    if state["has_K"]:
+        K_train = np.zeros((n_train, n_train), dtype=state["K"].dtype)
+        K_train = state["K"][idcs_train][:,idcs_train]
+        K_test = np.zeros((n_test, n_train), dtype=state["K"].dtype)
+        K_test = state["K"][idcs_test][:,idcs_train]
     # Test
-    n_test = len(idcs_test)
     IX_test = IX[idcs_test]
     T_test = T[idcs_test]
     labels_test = [ labels[i] for i in idcs_test ]
@@ -617,11 +806,19 @@ def split_test_train(state, options, log):
     state["IX_train"] = IX_train
     state["T_train"] = T_train
     state["labels_train"] = labels_train
+    state["idcs_train"] = idcs_train
     state["n_test"] = n_test
     state["IX_test"] = IX_test
     state["T_test"] = T_test
     state["labels_test"] = labels_test
+    state["idcs_test"] = idcs_test
     state["mp_gamma"] = mp_gamma # Note that this gamma applies to the uncleaned dataset
+    if state["has_L"]:
+        state["L_train"] = L_train
+        state["L_test"] = L_test
+    if state["has_K"]:
+        state["K_train"] = K_train
+        state["K_test"] = K_test
     log.prefix = log.prefix[0:-7]
     return state
 
@@ -688,6 +885,26 @@ def learn_optimal(state, options, log, verbose=False):
         out.append([v, res])
         v_res.append([v, res])
     out = sorted(out, key=lambda o: o[1]["rmse_test"])
+    out[0][1]["value_res"] = v_res
+    log.prefix = log.prefix[0:-7]
+    return state, out[0][1]
+
+def scan_optimal(state, options, log):
+    log.prefix += '[scan] '
+    path = options['scan_optimal']['path']
+    values = options['scan_optimal']['values']
+    fct = options['scan_optimal']['fct']
+    obj = options['scan_optimal']['obj']
+    log << "Grid search: " << path << values << log.endl
+    v_res = []
+    out = []
+    for v in values:
+        options = apply_parameter(options, path, v)
+        state, res = fct(state, options, log)
+        log << path << v << obj << res[obj] << log.endl
+        out.append([v, res])
+        v_res.append([v, res])
+    out = sorted(out, key=lambda o: o[1][obj])
     out[0][1]["value_res"] = v_res
     log.prefix = log.prefix[0:-7]
     return state, out[0][1]
@@ -763,6 +980,279 @@ learn_method_factory = {
     'linear': linear_model.LinearRegression,
     'ridge': linear_model.Ridge,
     'lasso': linear_model.Lasso
+}
+
+# ==========
+# EVALUATION
+# ==========
+
+def compute_auc_threshold(
+        class_list, 
+        sigma_list,
+        is_positive = lambda class_: class_ > 0,
+        appears_positive = lambda sigma, threshold: sigma > threshold,
+        invert=False,
+        ds=None,
+        outfile=''):
+    min_s = min(sigma_list)
+    max_s = max(sigma_list)
+    norm_s = max([abs(min_s), abs(max_s)])
+    if ds == None:
+        ds = 0.01*(max_s - min_s)
+    fp_tp_fn_tn_threshold = []
+    threshold = max_s + ds
+    while threshold >= min_s - ds:
+        n_p = 0 # true
+        n_n = 0 # false
+        n_tp = 0 # true +
+        n_fp = 0 # false +
+        n_tn = 0 # true -
+        n_fn = 0 # false -
+        for c,s in zip(class_list, sigma_list):
+            is_p = is_positive(c)
+            ap_p = appears_positive(s, threshold)
+            if invert: ap_p = not ap_p
+            if is_p: 
+                n_p += 1
+            else:
+                n_n += 1
+            if is_p and ap_p:
+                n_tp += 1
+            elif is_p and not ap_p:
+                n_fn += 1
+            elif not is_p and ap_p:
+                n_fp += 1
+            elif not is_p and not ap_p:
+                n_tn += 1
+            else: assert False
+        if n_p > 0:
+            f_tp = float(n_tp)/n_p # p(+|+)
+            f_fn = float(n_fn)/n_p
+        else:
+            f_tp = 1.0
+            f_fn = 0.0
+        if n_n > 0:
+            f_fp = float(n_fp)/n_n # p(+|-)
+            f_tn = float(n_tn)/n_n # p(-|-)
+        else:
+            f_fp = 0.0
+            f_tn = 1.0
+        threshold_norm = threshold/norm_s
+        threshold_sym = threshold/max_s if threshold > 0 else -threshold/min_s
+        mcc = matthews_corr_coeff(n_n*f_fp, n_p*f_tp, n_p*f_fn, n_n*f_tn)
+        fp_tp_fn_tn_threshold.append([
+            f_fp, f_tp, f_fn, f_tn, n_p, n_n, threshold, threshold_norm, threshold_sym, mcc])
+        threshold -= ds
+    # Output receiver operating characteristic
+    mccs = []
+    accs = []
+    precs = []
+    recs = []
+    for fp, tp, fn, tn, n_p, n_n, t, norm_t, norm_t_sym, mcc in fp_tp_fn_tn_threshold:
+        #if fp < 1e-10 or tp < 1e-10 or fn < 1e-10 or tn < 1e-10:
+        #    continue
+        # TODO Choose: weight both classes equally for mcc, acc?
+        mcc = matthews_corr_coeff(n_n*fp, n_p*tp, n_p*fn, n_n*tn)
+        if np.isnan(mcc): 
+            continue
+        acc = float(n_p*tp + n_n*tn)/(n_p+n_n)
+        prec = float(n_p*tp)/(n_p*tp+n_n*fp)
+        rec = float(n_p*tp)/(n_p*tp+n_p*fn)
+
+        #mcc = matthews_corr_coeff(fp, tp, fn, tn)
+        #acc = 0.5*float(tp+tn)
+        #prec = float(tp)/(tp+fp)
+        #rec = float(tp)/(tp+fn)
+
+        mccs.append([mcc, t])
+        accs.append([acc, t])
+        precs.append([prec, t])
+        recs.append([rec, t])
+
+    if len(mccs):
+        mcc_max = sorted(mccs, key = lambda m: -m[0])[0]
+        acc_max = sorted(accs, key = lambda m: -m[0])[0]
+        prec_max = sorted(precs, key = lambda m: -m[0])[0]
+        rec_max = sorted(recs, key = lambda m: -m[0])[0]
+    else:
+        soap.soapy.momo.osio << soap.soapy.momo.osio.mr << "WARNING Could not compute MCC" << soap.soapy.momo.osio.endl
+        mcc_max = [None, None]
+        acc_max = [None, None]
+        prec_max = [None, None]
+        rec_max = [None, None]
+
+    if outfile:
+        ofs = open(outfile, 'w')
+        for fp, tp, fn, tn, n_p, n_n, t, norm_t, norm_t_sym, mcc in fp_tp_fn_tn_threshold:
+            ofs.write('%1.7f %1.7f %+1.7f %+1.7f %+1.7f %+1.7f %+1.7f, %+1.2f\n' % (
+                fp, tp, fn, tn, t, norm_t, norm_t_sym, mcc))
+        ofs.close()
+    # Compute AUC
+    auc = 0.
+    for i in range(len(fp_tp_fn_tn_threshold)-1):
+        x0 = fp_tp_fn_tn_threshold[i][0]
+        x1 = fp_tp_fn_tn_threshold[i+1][0]
+        y = fp_tp_fn_tn_threshold[i][1]
+        y1 = fp_tp_fn_tn_threshold[i+1][1]
+        dA = y*(x1-x0) + 0.5*(y1-y)*(x1-x0)
+        if invert: dA *= -1
+        auc += dA
+    # Done.
+    return auc, mcc_max, acc_max, prec_max, rec_max, fp_tp_fn_tn_threshold
+
+def matthews_corr_coeff(fp, tp, fn, tn):
+    return (tp*tn - fp*fn)/np.sqrt( (tp+fp)*(tp+fn)*(tn+fp)*(tn+fn) )
+
+def rms_error(y, y_ref):
+    n = y_ref.shape[0]
+    dy = y-y_ref
+    dy2 = dy**2
+    rms = np.sum(dy2/n)**0.5
+    return rms
+
+def mae_error(y, y_ref):
+    n = y_ref.shape[0]
+    dy = y-y_ref
+    dyabs = np.abs(y-y_ref)
+    mae = np.sum(dyabs)/n
+    return mae
+
+# =======
+# KERNELS
+# =======
+
+def kernel_svm(state, options, log):
+    assert state["has_K"]
+    K_train = state["K_train"]
+    K_test = state["K_test"]
+    L_train = state["L_train"]
+    L_test = state["L_test"]
+    if "xi" in options["kernel_svm"]:
+        xi = options["kernel_svm"]["xi"]
+    else:
+        xi = 1.
+    mode = options["kernel_svm"]["mode"]
+    # Create target reference for multi-class threshold scoring
+    # E.g., class idx = 2 => y = [ -1, -1, +1 ]
+    n_classes = len(set(list(L_train)))
+    y_true = np.zeros((L_test.shape[0], n_classes))
+    y_true = y_true - 1
+    for i in range(n_classes):
+        idcs_i = np.where(L_test == i)
+        y_true[idcs_i,i] = +1
+    # Fit
+    from sklearn import svm # TODO Set SVC options
+    if mode == 'std':
+        clf = svm.SVC(
+            kernel='precomputed',
+            decision_function_shape='ovr', 
+            class_weight={0:1., 1:1., 2:1.},#'balanced', # TODO This can make a large difference!
+            C=1)
+    elif mode == 'ovr':
+        log << "Using OneVsRestClassifier object" << log.endl
+        from sklearn.multiclass import OneVsRestClassifier
+        clf = OneVsRestClassifier(
+            svm.SVC(
+                kernel='precomputed', 
+                class_weight={0: 1., 1: 1.}, 
+                probability=True, 
+                random_state=987131, 
+                decision_function_shape='ovr'))
+    clf.fit(K_train**xi, L_train)
+    # Predict
+    y_score = clf.decision_function(K_test**xi)
+    # Compute AUC
+    map_class_auc = {}
+    map_class_mcc = {}
+    for i in range(n_classes):
+        auc_out, mcc_out, acc_out, prec_out, rec_out, res = compute_auc_threshold(
+            class_list=y_true[:, i], 
+            sigma_list=y_score[:, i],
+            is_positive = lambda class_: class_ > 0,
+            appears_positive = lambda sigma, threshold: sigma > threshold,
+            invert=False,
+            ds=0.001,
+            outfile='roc_class-%d.tab' % i) #'roc_class-%d_xi-%1.0f.tab' % (i, xi))
+        print "AUC", i, auc_out, mcc_out
+        map_class_auc[i] = auc_out
+        map_class_mcc[i] = mcc_out[0]
+    res = {
+        'auc': map_class_auc,
+        'mcc': map_class_mcc,
+        'n_classes': n_classes,
+        'L_test_score': y_score,
+        'L_test': y_true,
+        'idcs_test': state["idcs_test"],
+        'user_var_0': state["user_var_0"] if "user_var_0" in state else None  # TODO Feed from options
+    }
+    return state, res
+
+def kernel_rr(state, options, log):
+    K_train = state["K_train"]
+    K_test = state["K_test"]
+    T_train = state["T_train"]
+    T_test = state["T_test"]
+    lreg = options["kernel_rr"]["lreg"]
+    if "xi" in options["kernel_rr"]:
+        xi = options["kernel_rr"]["xi"]
+    else:
+        xi = 1.0
+    from sklearn.kernel_ridge import KernelRidge
+    krrbox = KernelRidge(
+        alpha=lreg,
+        kernel='precomputed')
+    krrbox.fit(K_train**xi, T_train)
+    # Predict
+    y_train = krrbox.predict(K_train**xi)
+    y_test = krrbox.predict(K_test**xi)
+    # Evaluate
+    rmse_train = rms_error(y_train, T_train)
+    rmse_test = rms_error(y_test, T_test)
+    # Store
+    out_train = np.array([y_train, T_train]).T
+    out_test = np.array([y_test, T_test]).T
+    res = {
+        'T_train_pred': y_train,
+        'T_test_pred': y_test,
+        'T_train': np.copy(state["T_train"]),
+        'T_test': np.copy(state["T_test"]),
+        'rmse_train': rmse_train,
+        'rmse_test': rmse_test
+    }
+    return state, res
+
+def kernel_dot(IX_train, IX_test, options):
+    xi = options["xi"]
+    n_dim = IX_train.shape[1]
+    norm_train = np.sum(IX_train*IX_train, axis=1)**0.5
+    norm_train = np.tile(norm_train, (n_dim,1)).T
+    IX_train_norm = IX_train / norm_train
+    norm_test = np.sum(IX_test*IX_test, axis=1)**0.5
+    norm_test = np.tile(norm_test, (n_dim,1)).T
+    IX_test_norm = IX_test / norm_test
+    return IX_train_norm.dot(IX_train_norm.T)**xi, IX_test_norm.dot(IX_train_norm.T)**xi
+
+def compute_kernel_train_test(state, options, log):
+    log.prefix += '[kern] '
+    if "compute_kernel_train_test" in options:
+        options = options["compute_kernel_train_test"]
+    log << log.mg << "Computing kernel" << log.endl
+    kernel_method = options["type"]
+    suboptions = options[kernel_method]
+    kernel_fct = kernel_method_factory[kernel_method]
+    log << "Kernel type: '%s'" % kernel_method << log.endl
+    K_train, K_test = kernel_fct(state["IX_train"], state["IX_test"], suboptions)
+    state.register("compute_kernel_train_test", options)
+    if state["has_K"]:
+        log << log.my << "WARNING Overwriting existing kernel" << log.endl
+    state["has_K"] = True
+    state["K_train"] = K_train
+    state["K_test"] = K_test
+    log.prefix = log.prefix[0:-7]
+    return state
+
+kernel_method_factory = {
+    'dot': kernel_dot
 }
 
 if __name__ == "__main__":

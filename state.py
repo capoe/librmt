@@ -11,17 +11,34 @@ class State(object):
         self.state = kwargs
         self.storage = {}
         self.history = []
+        self["has_T"] = False # Targets
+        self["has_L"] = False # Labels
+        self["has_K"] = False # Kernel
         return
     def __getitem__(self, key):
         return self.state[key]
     def __setitem__(self, key, value):
         self.state[key] = value
         return
+    def __contains__(self, key):
+        return key in self.state
     def register(self, stamp, options):
         self.history.append((stamp, options))
         return
     def keys(self):
-        return self.state.keys()
+        return sorted(self.state.keys())
+    def printKeys(self, log):
+        for k in self.keys():
+            v = self[k]
+            t = type(v)
+            if t == list:
+                log << "%-15s : %s %s" % (k, str(t), str(type(v[0]))) << log.endl
+                if type(v[0]) == dict:
+                    for k in sorted(v[0].keys()):
+                        log << "%-15s . - %-15s %s" % ('', str(k), str(type(v[0][k]))) << log.endl
+            else:
+                log << "%-15s : %s" % (k, str(t)) << log.endl
+        return
     def store(self, key, value):
         self.storage[key] = value
         return
