@@ -17,7 +17,10 @@ from state import State
 from pipe import Pipe
 # External libraries
 from sklearn import linear_model
-from rdkit.Chem import AllChem as chem
+try:
+    from rdkit.Chem import AllChem as chem
+except:
+    pass
 try:
     #import soap
     raise ImportError
