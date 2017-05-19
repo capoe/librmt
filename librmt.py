@@ -52,6 +52,8 @@ def load_pairs(state, options, log):
     n_dim_in = state["n_dim"]
     n_dim_out = 2*n_dim_in
     n_samples_in = state["n_samples"]
+    combination_rule = options["combination_rule"]
+    log << "Combination rule for descriptors: '%s'" % combination_rule << log.endl
     # CREATE LABEL-TO-IDX MAP
     idx_map = { }
     for i in range(state["n_samples"]):
@@ -73,11 +75,18 @@ def load_pairs(state, options, log):
         info["pair-label-b"] = state["labels"][i2]
         # SYMMETRISE & COMBINE DESCRIPTORS
         x1, x2 = state["IX"][i1], state["IX"][i2]
-        x_sym_p = 0.5*(x1+x2)
-        x_sym_m = 0.5*np.abs(x1-x2)
-        x = np.zeros((n_dim_out,), dtype=state["IX"].dtype)
-        x[0:n_dim_in] = x_sym_p
-        x[n_dim_in:n_dim_out] = x_sym_m
+        if combination_rule == "symmetrise":
+            x_sym_p = 0.5*(x1+x2)
+            x_sym_m = 0.5*np.abs(x1-x2)
+            x = np.zeros((n_dim_out,), dtype=state["IX"].dtype)
+            x[0:n_dim_in] = x_sym_p
+            x[n_dim_in:n_dim_out] = x_sym_m
+        elif combination_rule == "concatenate":
+            x = np.zeros((n_dim_out,), dtype=state["IX"].dtype)
+            x[0:n_dim_in] = x1
+            x[n_dim_in:n_dim_out] = x2
+        else:
+            raise NotImplementedError("Combination rule: '%s'" % combination_rule)
         IX_out.append(x)
         # GENERATE PAIR LABELS AND CONFIG
         labels_out.append(info)
