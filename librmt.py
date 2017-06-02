@@ -224,6 +224,10 @@ def import_hdf5(state, options, log):
         options = options["import_hdf5"]
     hdf5_file = options["hdf5_file"]
     filter_fct = options["filter"]
+    if "import_graphs" in options:
+        do_import_graphs = options["import_graphs"]
+    else:
+        do_import_graphs = False
     # Open hdf5
     f = h5py.File(hdf5_file, 'r')
     # Data arrays: labels, targets, kernel
@@ -250,15 +254,35 @@ def import_hdf5(state, options, log):
     for i in range(n_samples):
         config = soap.soapy.momo.ExtendableNamespace()
         config.info = {}
+        config.idx = i
         for field in fields:
             config.info[field] = labels[field][i]
         configs.append(config)
+    # Import graphs (i.e., descriptors)
+    if do_import_graphs:
+        IJX = [] # i->config, j->atom, X->descriptor
+        IX = []
+        for c in configs:
+            g = f['graphs']['%06d' % c.idx]
+            ijx = g['feature_mat'].value
+            IJX.append(ijx)
+            ix = np.sum(ijx, axis=0)
+            IX.append(ix)
+            g_info = g.attrs.keys()
+            c.info['vertex_info'] = g.attrs['vertex_info']
+            c.info['graph_info'] = g.attrs['graph_info']
+        IX = np.array(IX)
+    else:
+        IX = np.copy(K)
+        IJX = []
     # Push data
     state["configs"] = configs
     state["labels"] = labels
     state["has_K"] = True
     state["K"] = K
-    state["IX"] = np.copy(K) # TODO Fix this: has_IX flag?
+    state["IX"] = IX # TODO Fix this: has_IX flag?
+    state["IJX"] = IJX
+    log << "Descriptor matrix: %dx%d %s" % (IX.shape[0], IX.shape[1], IX.dtype) << log.endl
     # Close hdf5 and return
     f.close()
     log.prefix = log.prefix[:-7]
@@ -295,9 +319,14 @@ def load_targets(state, options, log):
     if 'load_targets' in options:
         options = options['load_targets']
     log << log.mg << "Load targets" << log.endl
-    key = options['target_key']
-    fct = options['target_conv_fct']
-    T = np.array([ fct(config.info[key]) for config in state["configs"] ])
+    if 'extraction_fct' in options and options['extraction_fct'] != None:
+        log << "Using extraction function (ignoring 'target_key' and 'target_conv_fct')" << log.endl
+        fct = options['extraction_fct']
+        T = np.array([ fct(config) for config in state["configs"] ])
+    else:
+        key = options['target_key']
+        fct = options['target_conv_fct']
+        T = np.array([ fct(config.info[key]) for config in state["configs"] ])
     log << "<t>" << np.average(T) << log.endl
     log << "sqrt<dt^2>" << np.std(T) << log.endl
     state.register("load_targets", options)
@@ -609,7 +638,7 @@ def clean_descriptor_pca(state, options, log):
     IX_test = state["IX_test"]
     mp_gamma = state["mp_gamma"]
     log << "gamma_mp = D/N =" <<  mp_gamma << log.endl
-    assert mp_gamma == float(state["n_dim"])/state["n_train"]
+    assert mp_gamma == float(IX_train.shape[1])/IX_train.shape[0]
     # Z-SCORE PCA
     IX_train_norm_pca, IZ, X_mean, X_std, S, L, V = pca_compute(
         IX=IX_train,
@@ -885,6 +914,7 @@ def apply_parameter(options, path, value):
 
 def learn_optimal(state, options, log, verbose=False):
     log.prefix += '[scan] '
+    log << log.mr << "WARNING <learn_optimal> is deprecated, use <scan_optimal> instead" << log.endl
     path = options['learn_optimal']['path']
     values = options['learn_optimal']['values']
     log << "Grid search: " << path << values << log.endl
