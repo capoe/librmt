@@ -427,7 +427,7 @@ def upconvert_descriptor(state, options, log):
     n_test = state["n_test"]
     IX_train = np.copy(state["IX_train"])
     IX_test = np.copy(state["IX_test"])
-    n_dim = state["n_dim"]
+    n_dim = IX_train.shape[1]
     # INCOMING
     n_comps = int(upscale*n_dim)
     IX_train = IX_train[:,-n_comps:]
@@ -735,7 +735,7 @@ def div0(a, b):
         c[~np.isfinite(c)] = 0
         return c
 
-def normalize_descriptor_zscore(IX, ddof_=1):
+def normalize_descriptor_zscore_deprecated(IX, ddof_=1):
     # Rows of x are individual observations
     mu = np.mean(IX, axis=0)
     muTile = np.tile(mu, (IX.shape[0],1))
@@ -743,6 +743,30 @@ def normalize_descriptor_zscore(IX, ddof_=1):
     stdTile = np.tile(std, (IX.shape[0], 1))
     IZ = div0(IX - muTile, stdTile)
     return IZ, mu, std
+
+def normalise_descriptor_zscore(state, options, log):
+    log.prefix += '[desc] '
+    if "normalise_descriptor_zscore" in options:
+        options = options["normalise_descriptor_zscore"]
+    if options["zscore"]:
+        log << log.mg << "Z-scoring descriptor" << log.endl
+        IX_train = state["IX_train"]
+        IX_test = state["IX_test"]
+        # Normalise
+        X_mean = np.mean(IX_train, axis=0)
+        X_std = np.std(IX_train, axis=0, ddof=1)
+        log << "Mean min max:" << np.min(X_mean) << np.max(X_mean) << log.endl
+        log << "Std  min max:" << np.min(X_std) << np.max(X_std) << log.endl
+        IX_train_norm = div0(IX_train - X_mean, X_std)
+        IX_test_norm = div0(IX_test - X_mean, X_std)
+        # Store
+        state.register("clean_descriptor_zscore", options)
+        state["IX_train"] = IX_train_norm
+        state["IX_test"] = IX_test_norm
+        state["X_mean"] = X_mean
+        state["X_std"] = X_std
+    log.prefix = log.prefix[:-7]
+    return state
 
 def pca_compute(IX, log=None, norm_div_std=True, norm_sub_mean=True, ddof=1, eps=0.0):
     """
@@ -964,7 +988,7 @@ def learn_repeat_aggregate(state, options, log, verbose=False):
         model_out = model.execute(state_clone, options, log)
         out.append(model_out)
     # Aggregate
-    res_agg = []
+    res_agg = {}
     n_channels = len(out[0])
     for c in range(n_channels):
         tag = out[0][c].tag
@@ -1002,7 +1026,8 @@ def learn_repeat_aggregate(state, options, log, verbose=False):
             'n_train_pred_total': T_train.shape[0],
             'n_test_pred_total': T_test.shape[0]
         }
-        res_agg.append(res)
+        assert tag not in res_agg
+        res_agg[tag] = res.res
     log.prefix = log.prefix[0:-7]
     return state, res_agg
 
