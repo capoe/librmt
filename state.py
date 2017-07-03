@@ -55,3 +55,6 @@ class State(object):
         with open(pfile, 'w') as f:
             f.write(pstr)
         return
+    def unpickle(self, pfile):
+        self = pickle.load(open(pfile, 'rb'))
+        return self

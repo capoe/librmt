@@ -813,6 +813,10 @@ def split_test_train(state, options, log):
     log.prefix += '[pred] '
     if 'split_test_train' in options:
         options = options['split_test_train']
+    if "stride_shift" in options:
+        stride_shift = options["stride_shift"]
+    else:
+        stride_shift = 0
     log << log.mg << "Split onto training and test set" << log.endl
     # Read options
     f_train = options["f_train"]
@@ -835,9 +839,17 @@ def split_test_train(state, options, log):
                 idcs_test.append(idx)
             else: idcs_train.append(idx)
     else:
+        log << "Method:" << subsample_method
+        if subsample_method == "stride":
+            log << "(stride = %d)" % stride_shift
+        log << log.endl
+
         # Subsampling
         idcs_train, idcs_test = soap.soapy.learn.subsample_array(
-            np.arange(0, n_samples).tolist(), n_select=n_train, method=subsample_method, stride_shift=0)
+            np.arange(0, n_samples).tolist(), 
+            n_select=n_train, 
+            method=subsample_method, 
+            stride_shift=stride_shift)
     n_train = len(idcs_train)
     n_test = len(idcs_test)
     # Train
@@ -1198,6 +1210,10 @@ def kernel_svm(state, options, log):
         xi = options["kernel_svm"]["xi"]
     else:
         xi = 1.
+    if "class_weight" in options:
+        class_weight = options["class-weight"]
+    else:
+        class_weight = None
     mode = options["kernel_svm"]["mode"]
     # Create target reference for multi-class threshold scoring
     # E.g., class idx = 2 => y = [ -1, -1, +1 ]
@@ -1210,18 +1226,25 @@ def kernel_svm(state, options, log):
     # Fit
     from sklearn import svm # TODO Set SVC options
     if mode == 'std':
+        if class_weight == None:
+            class_weight = {}
+            for i in range(n_classes):
+                class_weight[i] = 1.
+            log << "Using class weights" << class_weight << log.endl
         clf = svm.SVC(
             kernel='precomputed',
             decision_function_shape='ovr', 
-            class_weight={0:1., 1:1., 2:1.},#'balanced', # TODO This can make a large difference!
+            class_weight=class_weight,#'balanced', # TODO This can make a large difference!
             C=1)
     elif mode == 'ovr':
         log << "Using OneVsRestClassifier object" << log.endl
         from sklearn.multiclass import OneVsRestClassifier
+        if class_weight == None:
+            class_weight = {0: 1., 1: 1.}
         clf = OneVsRestClassifier(
             svm.SVC(
                 kernel='precomputed', 
-                class_weight={0: 1., 1: 1.}, 
+                class_weight=class_weight, 
                 probability=True, 
                 random_state=987131, 
                 decision_function_shape='ovr'))
