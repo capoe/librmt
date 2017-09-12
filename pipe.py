@@ -10,6 +10,23 @@ class Pipe(object):
         self.sequence.append(fct)
         self.tags.append(tag)
         return
+    def apply(self, state, options, logger):
+        logger << logger.mb << "Entering pipe '%s' ..." % self.label << logger.endl
+        logger.prefix += '[%s] ' % (self.label)
+        output = []
+        for fct, tag in zip(self.sequence, self.tags):
+            out = fct(state, options, logger)
+            if type(out) == tuple and len(out) == 2: # (state, res)
+                res = ExtendableNamespace()
+                res.tag = tag
+                res.res = out[1]
+                output.append(res)
+                state = out[0]
+            else:
+                state = out
+        logger.prefix = logger.prefix[0:-len(self.label)-3]
+        logger << logger.mb << "Leaving pipe '%s' ..." % self.label << logger.endl
+        return state, output
     def execute(self, state, options, logger):
         logger << logger.mb << "Entering pipe '%s' ..." % self.label << logger.endl
         logger.prefix += '[%s] ' % (self.label)

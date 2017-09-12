@@ -73,6 +73,7 @@ def load_pairs(state, options, log):
         info = { key:row[key] for key in row }
         info["pair-label-a"] = state["labels"][i1]
         info["pair-label-b"] = state["labels"][i2]
+        info["idx"] = len(configs_out)
         # SYMMETRISE & COMBINE DESCRIPTORS
         x1, x2 = state["IX"][i1], state["IX"][i2]
         if combination_rule == "symmetrise":
@@ -300,8 +301,14 @@ def load_labels(state, options, log):
     key = options['label_key']
     fct = options['label_conv_fct']
     L = [ fct(config.info[key]) for config in state["configs"] ]
-    label_map = { l: idx for idx, l in enumerate( sorted(list(set(L))) ) }
-    idx_to_label_map = { idx: l for idx, l in enumerate( sorted(list(set(L))) ) }
+    if "label_map" in options:
+        label_map = options["label_map"]
+        idx_to_label_map = { label_map[l]: l for l in label_map }
+        log << "Using user-defined label map:" << label_map << log.endl
+        log << "Inverse map:" << idx_to_label_map << log.endl
+    else:
+        label_map = { l: idx for idx, l in enumerate( sorted(list(set(L))) ) }
+        idx_to_label_map = { idx: l for idx, l in enumerate( sorted(list(set(L))) ) }
     L = np.array([ label_map[l] for l in L ])
     for l in label_map:
         log << "Label '%s' -> '%d' : %d samples" % (
@@ -817,13 +824,16 @@ def split_test_train(state, options, log):
         stride_shift = options["stride_shift"]
     else:
         stride_shift = 0
+    if "seed" in options:
+        seed = options["seed"]
+    else:
+        seed = None
     log << log.mg << "Split onto training and test set" << log.endl
     # Read options
     f_train = options["f_train"]
     subsample_method = options["method"]
     # Calc n_train, n_test
     IX = state["IX"]
-    T = state["T"]
     labels = state["labels"]
     n_samples = IX.shape[0]
     n_train = int(f_train*n_samples+0.5)
@@ -838,25 +848,36 @@ def split_test_train(state, options, log):
             if dfct(config):
                 idcs_test.append(idx)
             else: idcs_train.append(idx)
-    else:
+    elif subsample_method in ["stride", "random"]:
         log << "Method:" << subsample_method
         if subsample_method == "stride":
             log << "(stride = %d)" % stride_shift
         log << log.endl
-
         # Subsampling
         idcs_train, idcs_test = soap.soapy.learn.subsample_array(
             np.arange(0, n_samples).tolist(), 
             n_select=n_train, 
             method=subsample_method, 
-            stride_shift=stride_shift)
+            stride_shift=stride_shift,
+            seed=seed)
+    elif subsample_method == "mask":
+        log << "Method:" << subsample_method << log.endl
+        idcs_train = np.where(options["mask"] > 0)[0]
+        idcs_test = np.where(options["mask"] == 0)[0]
+    else:
+        raise NotImplementedError("subsample_method '%s'" % subsample_method)
+    log << "Train idcs teaser:" << idcs_train[0:5] << log.endl
+    log << "Test  idcs teaser:" << idcs_test[0:5] << log.endl
     n_train = len(idcs_train)
     n_test = len(idcs_test)
     # Train
     IX_train = IX[idcs_train]
-    T_train = T[idcs_train]
     labels_train = [ labels[i] for i in idcs_train ]
     mp_gamma = float(IX_train.shape[1])/n_train
+    if state["has_T"]:
+        T = state["T"]
+        T_train = T[idcs_train]
+        T_test = T[idcs_test]
     if state["has_L"]:
         L = state["L"]
         L_train = L[idcs_train]
@@ -872,7 +893,6 @@ def split_test_train(state, options, log):
         K_test = state["K"][idcs_test][:,idcs_train]
     # Test
     IX_test = IX[idcs_test]
-    T_test = T[idcs_test]
     labels_test = [ labels[i] for i in idcs_test ]
     log << "n_samples:" << n_samples << log.endl
     log << "n_train:" << n_train << log.endl
@@ -881,15 +901,16 @@ def split_test_train(state, options, log):
     state.register("split_test_train", options)
     state["n_train"] = n_train
     state["IX_train"] = IX_train
-    state["T_train"] = T_train
     state["labels_train"] = labels_train
     state["idcs_train"] = idcs_train
     state["n_test"] = n_test
     state["IX_test"] = IX_test
-    state["T_test"] = T_test
     state["labels_test"] = labels_test
     state["idcs_test"] = idcs_test
     state["mp_gamma"] = mp_gamma # Note that this gamma applies to the uncleaned dataset
+    if state["has_T"]:
+        state["T_train"] = T_train
+        state["T_test"] = T_test
     if state["has_L"]:
         state["L_train"] = L_train
         state["L_test"] = L_test
@@ -924,6 +945,7 @@ def learn(state, options, log, verbose=False):
     np.savetxt('out.learn_test.txt', np.array([T_test, T_test_pred]).T)
     # RETURN RESULTS OBJECT
     res = {
+        't_train_avg': state["t_average"] if "t_average" in state else 0.0,
         'T_train_pred': T_train_pred,
         'T_test_pred': T_test_pred,
         'T_train': np.copy(state["T_train"]),
@@ -1200,6 +1222,65 @@ def mae_error(y, y_ref):
 # KERNELS
 # =======
 
+def kernel_svm_binary(state, options, log):
+    assert state["has_K"]
+    K_train = state["K_train"]
+    K_test = state["K_test"]
+    L_train = state["L_train"]
+    L_test = state["L_test"]
+    if "xi" in options["kernel_svm"]:
+        xi = options["kernel_svm"]["xi"]
+    else:
+        xi = 1.
+    if "class_weight" in options:
+        class_weight = options["class-weight"]
+    else:
+        class_weight = None
+    mode = options["kernel_svm"]["mode"]
+    # Create target reference for multi-class threshold scoring
+    # E.g., class idx = 2 => y = [ -1, -1, +1 ]
+    n_classes = len(set(list(L_train)))
+    y_true = L_test
+    # Fit
+    from sklearn import svm # TODO Set SVC options
+    if class_weight == None:
+        class_weight = 'balanced'
+        log << "Using class weights" << class_weight << log.endl
+    clf = svm.SVC(
+        kernel='precomputed',
+        class_weight=class_weight,#'balanced', # TODO This can make a large difference!
+        C=1)
+    clf.fit(K_train**xi, L_train)
+    if K_test.shape[0] > 0:
+        # Predict
+        y_score = clf.decision_function(K_test**xi)
+        # Compute AUC
+        auc_out, mcc_out, acc_out, prec_out, rec_out, res = compute_auc_threshold(
+            class_list=y_true, 
+            sigma_list=y_score,
+            is_positive = lambda class_: class_ > 0,
+            appears_positive = lambda sigma, threshold: sigma > threshold,
+            invert=False,
+            ds=0.001,
+            outfile='roc.tab') #'roc_class-%d_xi-%1.0f.tab' % (i, xi))
+    else:
+        log << log.my << "WARNING No samples in test set, skip predictions" << log.endl
+        y_score = np.array([])
+        auc_out = -1.0
+        mcc_out = -1.0
+    print "AUC", auc_out, mcc_out
+    res = {
+        'clf': clf,
+        'auc': auc_out,
+        'mcc': mcc_out,
+        'n_classes': n_classes,
+        'L_test_score': y_score,
+        'L_test': y_true,
+        'idcs_test': state["idcs_test"],
+        'user_var_0': state["user_var_0"] if "user_var_0" in state else None  # TODO Feed from options
+    }
+    return state, res
+
 def kernel_svm(state, options, log):
     assert state["has_K"]
     K_train = state["K_train"]
@@ -1302,6 +1383,7 @@ def kernel_rr(state, options, log):
     out_train = np.array([y_train, T_train]).T
     out_test = np.array([y_test, T_test]).T
     res = {
+        't_train_avg': state["t_average"] if "t_average" in state else 0.0,
         'T_train_pred': y_train,
         'T_test_pred': y_test,
         'T_train': np.copy(state["T_train"]),

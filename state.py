@@ -22,6 +22,8 @@ class State(object):
         return
     def __contains__(self, key):
         return key in self.state
+    def __len__(self):
+        return len(self["configs"])
     def register(self, stamp, options):
         self.history.append((stamp, options))
         return
@@ -55,6 +57,7 @@ class State(object):
         with open(pfile, 'w') as f:
             f.write(pstr)
         return
-    def unpickle(self, pfile):
+    def unpickle(self, pfile, log=None):
+        if log: log << "Loading state from '%s'" % pfile << log.endl
         self = pickle.load(open(pfile, 'rb'))
         return self
