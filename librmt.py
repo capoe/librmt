@@ -834,7 +834,6 @@ def split_test_train(state, options, log):
     subsample_method = options["method"]
     # Calc n_train, n_test
     IX = state["IX"]
-    labels = state["labels"]
     n_samples = IX.shape[0]
     n_train = int(f_train*n_samples+0.5)
     n_test = n_samples - n_train
@@ -872,7 +871,6 @@ def split_test_train(state, options, log):
     n_test = len(idcs_test)
     # Train
     IX_train = IX[idcs_train]
-    labels_train = [ labels[i] for i in idcs_train ]
     mp_gamma = float(IX_train.shape[1])/n_train
     if state["has_T"]:
         T = state["T"]
@@ -893,19 +891,23 @@ def split_test_train(state, options, log):
         K_test = state["K"][idcs_test][:,idcs_train]
     # Test
     IX_test = IX[idcs_test]
-    labels_test = [ labels[i] for i in idcs_test ]
     log << "n_samples:" << n_samples << log.endl
     log << "n_train:" << n_train << log.endl
     log << "n_test:" << n_test << log.endl
+    if "labels" in state:
+        labels = state["labels"]
+        labels_train = [ labels[i] for i in idcs_train ]
+        labels_test = [ labels[i] for i in idcs_test ]
     # SAVE STATE
     state.register("split_test_train", options)
     state["n_train"] = n_train
     state["IX_train"] = IX_train
-    state["labels_train"] = labels_train
+    if "labels" in state:
+        state["labels_train"] = labels_train
+        state["labels_test"] = labels_test
     state["idcs_train"] = idcs_train
     state["n_test"] = n_test
     state["IX_test"] = IX_test
-    state["labels_test"] = labels_test
     state["idcs_test"] = idcs_test
     state["mp_gamma"] = mp_gamma # Note that this gamma applies to the uncleaned dataset
     if state["has_T"]:
