@@ -15,6 +15,8 @@ class ConfigASE(object):
         self.atoms = []
         self.positions = []
         self.symbols = []
+    def __len__(self):
+        return len(self.atoms)
     def get_positions(self):
         return self.positions
     def get_chemical_symbols(self):
@@ -75,6 +77,21 @@ def read(
             configs.append(config)
         else: break
     return configs
+
+def write(
+        config_file,
+        configs):
+    ofs = open(config_file, 'w')
+    for c in configs:
+        ofs.write('%d\n' % (len(c)))
+        for k in sorted(c.info.keys()):
+            ofs.write('%s=%s ' % (k, c.info[k]))
+        ofs.write('\n')
+        for i in range(len(c)):
+            ofs.write('%s %+1.4f %+1.4f %+1.4f\n' % (
+                c.get_chemical_symbols()[i], c.positions[i][0], c.positions[i][1], c.positions[i][2]))
+    ofs.close()
+    return
 
 def read_filter_configs(
         config_file, 
