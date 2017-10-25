@@ -328,6 +328,7 @@ class ShellInterface(object):
         self.sel_justify = None
         self.sel_header = False
         self.sel_trim = "="
+        self.silent = False
         # EXE ATTRIBUTES
         self.catch = OS_EXE_CATCH()
         self.assert_zero = OS_EXE_ASSERT()
@@ -369,6 +370,7 @@ class ShellInterface(object):
         return
     # PRINTER METHODS =========================================================
     def __lshift__(self, mssg):
+        if self.silent: return self
         if type(mssg) == OS_LINE_CHAR:
             # <LOG MESSAGE HERE>
             sys.stdout.write(str(mssg))

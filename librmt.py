@@ -783,7 +783,7 @@ def pca_compute(IX, log=None, norm_div_std=True, norm_sub_mean=True, ddof=1, eps
     # Normalize: mean, std
     if log: log << "PCA: Normalize ..." << log.endl
     X_mean = np.mean(IX, axis=0)
-    X_std = np.std(IX, axis=0, ddof=1)
+    X_std = np.std(IX, axis=0, ddof=ddof)
     IX_norm = IX
     if norm_sub_mean:
         IX_norm = IX - X_mean
@@ -889,6 +889,10 @@ def split_test_train(state, options, log):
         K_train = state["K"][idcs_train][:,idcs_train]
         K_test = np.zeros((n_test, n_train), dtype=state["K"].dtype)
         K_test = state["K"][idcs_test][:,idcs_train]
+    if "IY" in state:
+        IY = state["IY"]
+        IY_train = IY[idcs_train]
+        IY_test = IY[idcs_test]
     # Test
     IX_test = IX[idcs_test]
     log << "n_samples:" << n_samples << log.endl
@@ -919,6 +923,9 @@ def split_test_train(state, options, log):
     if state["has_K"]:
         state["K_train"] = K_train
         state["K_test"] = K_test
+    if "IY" in state:
+        state["IY_train"] = IY_train
+        state["IY_test"] = IY_test
     log.prefix = log.prefix[0:-7]
     return state
 
@@ -1391,7 +1398,9 @@ def kernel_rr(state, options, log):
         'T_train': np.copy(state["T_train"]),
         'T_test': np.copy(state["T_test"]),
         'rmse_train': rmse_train,
-        'rmse_test': rmse_test
+        'rmse_test': rmse_test,
+        'std_data_train': np.std(state["T_train"]),
+        'std_data_test': np.std(state["T_test"])
     }
     return state, res
 
@@ -1405,6 +1414,11 @@ def kernel_dot(IX_train, IX_test, options):
     norm_test = np.tile(norm_test, (n_dim,1)).T
     IX_test_norm = IX_test / norm_test
     return IX_train_norm.dot(IX_train_norm.T)**xi, IX_test_norm.dot(IX_train_norm.T)**xi
+
+def shift_kernel(state, options, log):
+    state["K_train"] = 0.5*(1. + state["K_train"])
+    state["K_test"] = 0.5*(1. + state["K_test"])
+    return state
 
 def compute_kernel_train_test(state, options, log):
     log.prefix += '[kern] '
