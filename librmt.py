@@ -13,6 +13,7 @@ import csv
 # Internal libraries
 import ising as ising
 import nonlinear as nonlinear
+import labs as labs
 from state import State
 from pipe import Pipe
 # External libraries
