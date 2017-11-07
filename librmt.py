@@ -950,6 +950,8 @@ def learn(state, options, log, verbose=False):
     # EVALUATE ERRORS
     rmse_train = (np.sum((T_train_pred-T_train)**2)/n_train)**0.5
     rmse_test = (np.sum((T_test_pred-T_test)**2)/n_test)**0.5
+    mae_train = np.sum(np.abs(T_train_pred-T_train))/n_train
+    mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
     np.savetxt('out.learn_train.txt', np.array([T_train, T_train_pred]).T)
     np.savetxt('out.learn_test.txt', np.array([T_test, T_test_pred]).T)
     # RETURN RESULTS OBJECT
@@ -961,6 +963,8 @@ def learn(state, options, log, verbose=False):
         'T_test': np.copy(state["T_test"]),
         'rmse_train': rmse_train,
         'rmse_test': rmse_test,
+        'mae_train': mae_train,
+        'mae_test': mae_test,
         'model': regr,
         'n_train': n_train,
         'n_test': n_test,
@@ -1053,6 +1057,8 @@ def learn_repeat_aggregate(state, options, log, verbose=False):
         T_test_pred = np.array(T_test_pred)
         rmse_train = np.average((T_train-T_train_pred)**2)**0.5
         rmse_test = np.average((T_test-T_test_pred)**2)**0.5
+        mae_train = np.sum(np.abs(T_train_pred-T_train))/n_train
+        mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
         res = soap.soapy.momo.ExtendableNamespace()
         res.tag = tag
         res.res = { 
@@ -1062,6 +1068,8 @@ def learn_repeat_aggregate(state, options, log, verbose=False):
             "T_test_pred": T_test_pred, 
             "rmse_train": rmse_train, 
             "rmse_test": rmse_test,
+            "mae_train": mae_train, 
+            "mae_test": mae_test,
             'std_data_train': np.std(T_train),
             'std_data_test': np.std(T_test),
             'n_train': n_train,
@@ -1400,7 +1408,9 @@ def kernel_rr(state, options, log):
         'rmse_train': rmse_train,
         'rmse_test': rmse_test,
         'std_data_train': np.std(state["T_train"]),
-        'std_data_test': np.std(state["T_test"])
+        'std_data_test': np.std(state["T_test"]),
+        'n_train': y_train.shape[0],
+        'n_test': y_test.shape[0]
     }
     return state, res
 
