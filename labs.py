@@ -118,6 +118,7 @@ def mp_transform(IX, norm_avg, norm_std, log):
         norm_sub_mean=norm_avg,
         eps=0.,
         ddof=0)
+    if log: log << rmt.dist_mp_bounds(mp_gamma) << log.endl
     idcs_eigen_signal = np.where(L.diagonal() > rmt.dist_mp_bounds(mp_gamma)[1])[0]
     n_dim_mp_signal = len(idcs_eigen_signal)
     if log: log << "[mptf] Dim reduction %d -> %d with gamma_mp = %+1.2f" % (
@@ -153,7 +154,7 @@ def binomial_coeff(n, k):
         b *= (n+1-i)/i
     return b
 
-def hpcamp_transform(state, options, log):
+def hpcamp(IX, options, log):
     # PARAMETERS
     # - target subspace dimension ("take")
     # - minimum cluster size ("min_cluster_size")
@@ -178,7 +179,6 @@ def hpcamp_transform(state, options, log):
     # ==========
 
     # Covariance-based clustering
-    IX = state["IX_train"]
     N = IX.shape[0]
     D = IX.shape[1]
     covmat = np.cov(IX, rowvar=False, ddof=0)
@@ -320,9 +320,15 @@ def hpcamp_transform(state, options, log):
                     fidx_child = fidx_child_list[0]
                 assert fidx_child not in assigned
                 assigned[fidx_child] = True
-            log << "Add sequence: length %d" % seq << log.endl
-            if verbose: print seq
+            if verbose: 
+                log << "Add sequence: length %d" % len(seq) << log.endl
+                print seq
             sequences.append(seq)
+        sequences = sorted(sequences, key=lambda s: len(s))
+        log << "Have %d filter sequences" % (len(sequences)) << log.endl
+        for idx, seq in enumerate(sequences):
+            log << len(seq)
+        log << log.endl
         if file_debug:
             ofs = open('sequences.txt', 'w')
             sizes = [ len(f) for f in filter_idcs ]
@@ -331,7 +337,6 @@ def hpcamp_transform(state, options, log):
                     ofs.write('%d %+1.7e\n' % (sizes[fidx], filter_lambdas[fidx]))
                 ofs.write('\n')
             ofs.close()
-        log << "Have %d filter sequences" % (len(sequences)) << log.endl
         # Select sequence heads (and/or tails depending on options)
         idcs_sel = []
         for s in sequences:
@@ -354,7 +359,7 @@ def hpcamp_transform(state, options, log):
     # ==========================
 
     #dim_overlap = P_tf.T.dot(P_tf) # NOTE This matrix can be very large => memory issues
-    if do_fps:
+    if V_tf.shape[1] > take and do_fps:
         # Distance matrix for FPS
         K = (V_tf.T.dot(V_tf))**2
         D = (1. - K**2 + 1e-10)**0.5
@@ -404,11 +409,12 @@ def hpcamp_transform(state, options, log):
     if V_tf.shape[1] < 1:
         log << log.my << "ERROR HPCAMP did not return any filters" << log.endl
         raise RuntimeError()
+    return V_tf
 
-    # =======
+def hpcamp_transform(state, options, log):
+    # Transform
+    V_tf = hpcamp(state["IX_train"], options, log)
     # Project
-    # =======
-
     state["IX_train"] = state["IX_train"].dot(V_tf)
     state["IX_test"] = state["IX_test"].dot(V_tf)
     # Normalise
@@ -416,6 +422,50 @@ def hpcamp_transform(state, options, log):
     mean = np.sum(state["IX_train"], axis=0, keepdims=True)/state["IX_train"].shape[0]
     state["IX_train"] = (state["IX_train"]-mean)/norm
     state["IX_test"] = (state["IX_test"]-mean)/norm
+    log.prefix = log.prefix[0:-7]
+    return state
+
+def upconvert_descriptor_matrix(IX, concatenate):
+    D = IX.shape[1]
+    D2 = D*(D+1)/2
+    idcs_upper = np.triu_indices(D)
+    IX_up = np.zeros((IX.shape[0], D+D2), dtype=IX.dtype)
+    IX_up[:,0:D] = IX
+    for i in range(IX.shape[0]):
+        IX_up[i,D:] = np.outer(IX[i], IX[i])[idcs_upper]
+    return IX_up
+
+def hpcamp_transform_concat(state, options, log):
+    # Options
+    upconvert = options["hpcamp_transform"]["upconvert"]
+    upconvert_concatenate = True
+    concatenate = options["hpcamp_transform"]["concatenate"]
+    # Transform
+    V_tf = hpcamp(state["IX_train"], options, log)
+    # Project
+    IU_train = state["IX_train"].dot(V_tf)
+    IU_test = state["IX_test"].dot(V_tf)
+    # Upconvert?
+    if upconvert:
+        log << "Upconverting transformed descriptor (concatenate: %s)..." % upconvert_concatenate << log.endl
+        IU_train = upconvert_descriptor_matrix(IU_train, concatenate=upconvert_concatenate)
+        IU_test = upconvert_descriptor_matrix(IU_test, concatenate=upconvert_concatenate)
+    # Concatenate?
+    if concatenate:
+        log << "Concatenating descriptor ..." << log.endl
+        IX_train = np.zeros((state["IX_train"].shape[0], state["IX_train"].shape[1]+IU_train.shape[1]), IU_train.dtype)
+        IX_test = np.zeros((state["IX_test"].shape[0], state["IX_test"].shape[1]+IU_test.shape[1]), IU_test.dtype)
+        IX_train[:,0:state["IX_train"].shape[1]] = state["IX_train"]
+        IX_train[:,state["IX_train"].shape[1]:] = IU_train
+        IX_test[:,0:state["IX_test"].shape[1]] = state["IX_test"]
+        IX_test[:,state["IX_test"].shape[1]:] = IU_test
+    else:
+        IX_train = IU_train
+        IX_test = IU_test
+    log << "Transformed descriptor dimension:" << IX_train.shape[1] << log.endl
+    # Store
+    state["IX_train"] = IX_train
+    state["IX_test"] = IX_test
     log.prefix = log.prefix[0:-7]
     return state
 

@@ -42,6 +42,8 @@ class IsingModel(object):
         return S
     def energy(self, state):
         return -0.5*state.S.dot(self.J).dot(state.S) - self.B.dot(state.S)
+    def energy_split(self, state):
+        return -self.B.dot(state.S), -0.5*state.S.dot(self.J).dot(state.S)
 
 
 class IsingEnsemble(object):
@@ -120,9 +122,9 @@ class IsingIntegrator(object):
             verbose=True):
         ensemble = IsingEnsemble(model, self)
         # Energy of initial configuration
-        E0 = model.energy(state)
-        #E0 = 0.5*state.S.dot(model.J).dot(state.S) + model.B.dot(state.S)
-        if verbose: print "Step= %4d    Energy=%+1.7e" % (0, E0)
+        e_B, e_J = model.energy_split(state)
+        E0 = e_J+e_B
+        if verbose: print "Step= %4d    Energy=%+1.7e [e_B=%+1.4e e_J=%+1.4e]" % (0, E0, e_B, e_J)
         # Annealing
         if anneal.shape[0] == 0:
             anneal = [ self.kT for n in range(n_steps) ]
@@ -148,9 +150,9 @@ class IsingIntegrator(object):
                 if accept:
                     #print "Accept"
                     state.S[i] = T[i]
-            E = model.energy(state)
-            #E = 0.5*state.S.dot(model.J).dot(state.S) + model.B.dot(state.S)
-            if verbose: print "Step= %4d   Energy= %+1.7e   T= %+1.3e" % (n+1, E, kT)
+            e_B, e_J = model.energy_split(state)
+            E = e_J+e_B
+            if verbose: print "Step= %4d    Energy=%+1.4e [e_B=%+1.4e e_J=%+1.4e]   T=%+1.3e" % (n, E, e_B, e_J, kT)
             if n >= sample_start and n % sample_every == 0:
                 ensemble.append(state.S, E)
         return ensemble
@@ -167,5 +169,3 @@ class IsingIntegrator(object):
 
 
 
-
-#

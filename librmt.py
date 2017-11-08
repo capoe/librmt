@@ -989,13 +989,13 @@ def learn_optimal(state, options, log, verbose=False):
     log << log.mr << "WARNING <learn_optimal> is deprecated, use <scan_optimal> instead" << log.endl
     path = options['learn_optimal']['path']
     values = options['learn_optimal']['values']
-    log << "Grid search: " << path << values << log.endl
+    log << "Grid search: path=" << path << log.endl
     v_res = []
     out = []
     for v in values:
         options = apply_parameter(options, path, v)
         state, res = learn(state, options, log, verbose)
-        log << path << v << "rmse_train" << res["rmse_train"] << "rmse_test" << res["rmse_test"] << log.endl
+        log << path << ("%+1.4e" % v if type(v) in [ float, int ] else v) << "rmse_train" << "%+1.4e" % res["rmse_train"] << "rmse_test" << "%+1.4e" % res["rmse_test"] << log.endl
         out.append([v, res])
         v_res.append([v, res])
     out = sorted(out, key=lambda o: o[1]["rmse_test"])
@@ -1009,17 +1009,19 @@ def scan_optimal(state, options, log):
     values = options['scan_optimal']['values']
     fct = options['scan_optimal']['fct']
     obj = options['scan_optimal']['obj']
-    log << "Grid search: " << path << values << log.endl
+    log << "Grid search: path=" << path << log.endl
     v_res = []
     out = []
     for v in values:
         options = apply_parameter(options, path, v)
         state, res = fct(state, options, log)
-        log << path << v << obj << res[obj] << log.endl
+        log << path << ("%+1.4e" % v if type(v) in [ float, int ] else v ) << obj << "%+1.4e" % res[obj] << log.endl
         out.append([v, res])
         v_res.append([v, res])
     out = sorted(out, key=lambda o: o[1][obj])
     out[0][1]["value_res"] = v_res
+    log << "Minimum at" << ("%+1.4e" % out[0][0] if type(out[0][0]) in [ float, int ] else out[0][0] ) << obj << "%+1.4e" % out[0][1][obj] << log.endl
+    log << "Maximum at" << ("%+1.4e" % out[-1][0] if type(out[-1][0]) in [ float, int ] else out[-1][0] ) << obj << "%+1.4e" % out[-1][1][obj] << log.endl
     log.prefix = log.prefix[0:-7]
     return state, out[0][1]
 
