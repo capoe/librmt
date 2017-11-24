@@ -16,7 +16,11 @@ def hierarchical_clustering(
     # Read this as: cluster i merged from clusters c1 and c2, 
     # with cluster distance d12, and number of member nodes n12
     if log: log << "Hierarchical clustering ..." << log.flush
-    L = sch.linkage(distance_matrix, method='centroid')
+    N = distance_matrix.shape[0]
+    ii = np.triu_indices(N, k=1) # upper triangle without diagonal
+    distances_compressed = distance_matrix[ii]
+    #L = sch.linkage(distance_matrix, method='centroid') # NOTE BUG: Distance matrix not interpreted as such!!
+    L = sch.linkage(distances_compressed, method='centroid', metric="*should not be used*")
     if log: log << "done." << log.endl
     # Unwrap clusters from linkage matrix
     if log: log << "Unwrapping clusters ..." << log.flush
@@ -108,7 +112,7 @@ def threshold_ix(state, options, log):
     stds = np.std(state["IX_train"], axis=0)
     return state
 
-def mp_transform(IX, norm_avg, norm_std, log):
+def mp_transform(IX, norm_avg, norm_std, log, hist=False):
     # Computes MP thresholded PC space based on cov(IX)
     mp_gamma = float(IX.shape[1])/IX.shape[0]
     IX_norm_pca, IZ, X_mean, X_std, S, L, V = rmt.pca_compute(
@@ -125,6 +129,15 @@ def mp_transform(IX, norm_avg, norm_std, log):
         IX.shape[1], n_dim_mp_signal, mp_gamma) << log.endl
     L_signal = L.diagonal()[idcs_eigen_signal]
     V_signal = V[:,idcs_eigen_signal]
+    if hist:
+        hist, bin_edges = np.histogram(a=L.diagonal(), bins=100, density=True)
+        hist_signal, bin_edges = np.histogram(a=L_signal, bins=bin_edges, density=True)
+        bin_centres = np.zeros((bin_edges.shape[0]-1,), dtype='float64')
+        for i in range(bin_edges.shape[0]-1):
+            bin_centres[i] = 0.5*(bin_edges[i]+bin_edges[i+1])
+        mp_sample = rmt.dist_mp_sample(bin_centres, mp_gamma)
+        np.savetxt('out.pca_hist.txt', np.array([ bin_centres, hist, mp_sample, hist_signal ]).T)
+        np.savetxt('out.pca_eigv.txt', L.diagonal())
     return L_signal, V_signal, X_mean, X_std
 
 def fps(D, n_select, i0):
@@ -470,6 +483,389 @@ def hpcamp_transform_concat(state, options, log):
     return state
 
 
+def polympf_transform(state, options, log):
+
+    # TODO Concatenate with linear descriptor
+    # TODO Set legendre cutoff and options
+    # TODO Handle sparsification
+
+    min_size_cluster_y = 10 # TODO Option
+    min_std_cluster_y = 0.1 # relative to std-dev of all targets
+    k_c_max_y = 0.9
+    msd_threshold_k = 3
+    deep_mp = False
+    options_deep_mp = {
+        # Clustering
+        "min_cluster_size": 10,
+        "cluster_similarity_threshold": 0.9,
+        # Sequencing
+        "sparsify": "sequence", # "sequence" or "fps"
+        "filter_seq_sim_cutoff": 0.71, # 0.71, 0.9
+        "sequence_select": [0], # [0] or [ 0, -1 ]
+        # FPS
+        "do_fps": False,
+        "fps_root": "largest_pc", # "largest_cluster"
+        "target_dim": 30,
+        # Post-processing
+        "upconvert": True,
+        "concatenate": True
+    }
+    verbose = False
+    np.set_printoptions(precision=2)
+
+    IX = state["IX_train"]
+    Y = state["T_train"]
+
+    # DESCRIPTOR DISTRIBUTION MOMENTS FOR LATER USE
+    assert np.sum(np.sum(IX, axis=0)**2) < 1e-10 # Need to centre descriptor first before using this transformation
+    x_moment_2 = np.std(IX, axis=0)**2
+    x_moment_4 = np.average(IX**4, axis=0)
+    log << "Moments:   <mu2> = %+1.7e   <mu4> = %+1.7e" % (np.average(x_moment_2), np.average(x_moment_4)) << log.endl
+
+    # TARGET-BASED CLUSTERING
+    dmat_y = np.abs(np.subtract.outer(Y, Y))
+    clusters_y_all = hierarchical_clustering(
+        distance_matrix=dmat_y, min_size=1, log=log, verbose=False)
+    log << "Target-space: # clusters [all] =" << len(clusters_y_all) << log.endl
+    clusters_y = filter(lambda c: len(c["nodes"]) >= min_size_cluster_y, clusters_y_all)
+    log << "Target-space: # clusters [>s0] =" << len(clusters_y) << log.endl
+
+    # Filter clusters based on std dev
+    clusters_y_filtered = []
+    std_Y = np.std(Y)
+    for cidx, c in enumerate(clusters_y):
+        Y_c = Y[c["nodes"]]
+        std_Y_c = np.std(Y_c)
+        c["y_avg"] = np.average(Y_c)
+        c["y_std"] = std_Y_c
+        if std_Y_c/std_Y > min_std_cluster_y:
+            clusters_y_filtered.append(c)
+    clusters_y_filtered = sorted(clusters_y_filtered, key=lambda c: -c["len"])
+    log << "Target-space: # clusters [>dy] =" << len(clusters_y_filtered) << log.endl
+
+    # Calculate cluster subspace similarity matrix
+    C = np.zeros((len(clusters_y_filtered), Y.shape[0]), dtype='float64')
+    for cidx, cluster in enumerate(clusters_y_filtered):
+        C[cidx, cluster["nodes"]] = 1.0
+    C = (C.T/np.sqrt(np.sum(C*C, axis=1))).T
+    K_C = C.dot(C.T)
+
+    # Initialise fields
+    for c in clusters_y_all:
+        c["filters"] = []
+        c["filter_mu"] = None
+        c["filter_sigma"] = None
+        c["skip"] = False
+    clusters_y_analysed = []
+    clusters_y_analysed_idcs = []
+    cluster_centre_filters = []
+
+    # Analyse clusters
+    for cidx, cluster in enumerate(clusters_y_filtered):
+        is_largest = cluster["len"] == IX.shape[0] #(cidx == len(clusters_y_filtered) - 1)
+
+        # Proceed only if subspace overlap with previous analysed clusters is sufficiently small
+        if is_largest: pass
+        elif len(clusters_y_analysed_idcs):
+            k_c = K_C[cidx, clusters_y_analysed_idcs]
+            k_max = np.max(k_c)
+            if k_max > k_c_max_y:
+                cluster["skip"] = True
+                cluster["filter_sigma"] = clusters_y_filtered[clusters_y_analysed_idcs[np.argmax(k_c)]]["filter_sigma"]
+                cluster["filter_mu"] = clusters_y_filtered[clusters_y_analysed_idcs[np.argmax(k_c)]]["filter_mu"]
+                cluster["filters"] = clusters_y_filtered[clusters_y_analysed_idcs[np.argmax(k_c)]]["filters"]
+                continue
+        else: pass
+        log << "Cluster %3d   size = %3d    <y> = %+1.2f +/- %+1.2f" % (
+            cidx, cluster["len"], cluster["y_avg"], cluster["y_std"]) << log.endl
+        if verbose:
+            print "Cluster", cidx, "size", cluster["len"], "largest?", is_largest, "global idx", cluster["idx"], "parents", cluster["parents"]
+            print "Cluster y avg =", cluster["y_avg"], "+/-", cluster["y_std"]
+        clusters_y_analysed_idcs.append(cidx)
+        clusters_y_analysed.append(cluster)
+
+        # Slice descriptor matrix along sample axis.
+        # Then determine mean and std-dev for each component
+        idcs_ss = sorted(cluster["nodes"])
+        IX_ss = IX[idcs_ss,:]
+        filter_mu = np.average(IX_ss, axis=0)
+        filter_std = np.std(IX_ss, axis=0)
+        IX_ss = (IX_ss - filter_mu) #/filter_std
+        IX_ss = rmt.div0(IX_ss, filter_std)
+        cluster["filter_mu"] = filter_mu
+        cluster["filter_std"] = filter_std
+
+        # TEST DISTANCE FROM ORIGIN
+        filter_centre_msd = filter_mu.dot(filter_mu)
+        log << "Filter centre msd" << filter_centre_msd << log.endl
+        def sample_variance(d, N, s2, s4):
+            return np.sum(1./N*s2), np.sum( (s4 - 3*s2*s2)/N**3 + 2*s2*s2/N**2)
+        msd, msd_var = sample_variance(
+            IX_ss.shape[1], IX_ss.shape[0], x_moment_2, x_moment_4)
+        # Add as filter if MSD deemed significant
+        filter_centre_msd_threshold = msd + msd_threshold_k*msd_var**0.5
+        log << "Centre MSD threshold" << filter_centre_msd_threshold << log.endl
+        l0, l1 = rmt.dist_mp_bounds(float(IX_ss.shape[1])/IX_ss.shape[0])
+        filter_centre_msd_threshold_mp = l1
+        log << "Centre MSD threshold (MP)" << filter_centre_msd_threshold_mp << log.endl
+        if filter_centre_msd >= filter_centre_msd_threshold:
+            cluster_centre_filters.append(filter_mu)
+
+        # EXTRACT FILTERS FROM SLICED DATA MATRIX
+        if deep_mp:
+            V = hpcamp(
+                IX=IX_ss,
+                options={ "hpcamp_transform": options_deep_mp },
+                log=log)
+        else:
+            L, V, mu, std = mp_transform(
+                IX=IX_ss,
+                norm_avg=False, # done above
+                norm_std=False, # done above
+                log=log if verbose else None,
+                hist=False)
+            cluster["filters"] = V
+        log << "Projecting onto MP space: shape(v) =" << V.shape << log.endl
+
+    # COLLECT FILTERS
+    V_tf = [] # NOTE Rows are the filter directions (mp_transform returns the transpose of this)
+    mu_tf = []
+    std_tf = []
+    # From cluster mean
+    ones = 1.*np.ones((IX.shape[1],))
+    zeros = 1.*np.zeros((IX.shape[1],))
+    for filt in cluster_centre_filters:
+        filt = filt/np.dot(filt,filt)**0.5
+        V_tf.append(filt)
+        mu_tf.append(zeros)
+        std_tf.append(ones)
+    # From cluster variance
+    for cluster in clusters_y_analysed:
+        for i in range(cluster["filters"].shape[1]):
+            V_tf.append(cluster["filters"][:,i])
+            mu_tf.append(cluster["filter_mu"])
+            std_tf.append(cluster["filter_std"])
+    V_tf = np.array(V_tf)
+    mu_tf = np.array(mu_tf)
+    std_tf = np.array(std_tf)
+    log << "Target-space: filter matrix" << V_tf.shape << log.endl
+
+    # SHIFT, SCALE AND PROJECT
+    IX_train_out = []
+    IX_test_out = []
+    for n in range(V_tf.shape[0]):
+        ix_train = ((state["IX_train"]-mu_tf[n])/std_tf[n]).dot(V_tf[n])
+        ix_test = ((state["IX_test"]-mu_tf[n])/std_tf[n]).dot(V_tf[n])
+        IX_train_out.append(ix_train)
+        IX_test_out.append(ix_test)
+    state["IX_train"] = np.array(IX_train_out).T
+    state["IX_test"] = np.array(IX_test_out).T
+
+    # RENORMALISE
+    state = rmt.normalise_descriptor_zscore(state, options, log)
+    print np.std(state["IX_train"], axis=0)
+    print np.average(state["IX_train"], axis=0)
+    print np.std(state["IX_test"], axis=0)
+
+    state = legendre_transform(state, options, log)
+
+    raw_input('___')
+    return state
+
+def legendre_transform(state, options, log):
+    # Apply Legendre mapping
+    max_degree = 6 # TODO Option
+    scale = 0.25 # ix -> ix*scale in units of sigma (= 1.0) # TODO Option
+    d = state["IX_train"].shape[1]
+    IX_train = state["IX_train"]
+    IX_test = state["IX_test"]
+    IX_train_out = np.zeros(
+        (state["IX_train"].shape[0], max_degree*d), 
+        dtype=state["IX_train"].dtype)
+    IX_test_out = np.zeros(
+        (state["IX_test"].shape[0], max_degree*d), 
+        dtype=state["IX_test"].dtype)
+    # In principle monomials x, x**2, x**3, ... should perform equivalently
+    legendre = [
+        lambda x: 1.0,                  # n = 0 (here not used)
+        lambda x: x,                    # n = 1
+        lambda x: 0.5*(3*x**2 - 1),     # ...
+        lambda x: 0.5*(5*x**3 - 3*x),
+        lambda x: 0.125*(35*x**4 - 30*x**2 + 3),
+        lambda x: 0.125*(63*x**5 - 70*x**3 + 15*x),
+        lambda x: 1./16.*(231*x**6 - 315*x**4 + 105*x**2 - 5),
+        lambda x: 1./16.*(429*x**7 - 693*x**5 + 315*x**3 - 35*x)
+    ]
+    for n in range(1, max_degree+1):
+        ix_train_n = legendre[n](scale*IX_train)
+        ix_test_n = legendre[n](scale*IX_test)
+        IX_train_out[:,(n-1)*d:n*d] = ix_train_n
+        IX_test_out[:,(n-1)*d:n*d] = ix_test_n
+    log << "Input dimension before legendre transform: d =" << d << log.endl 
+    log << "Output dimension after legendre transform: d'=" << IX_train_out.shape[1] << log.endl
+    log << "Standard deviation along components" << np.std(IX_train_out, axis=0) << log.endl
+    state["IX_train"] = IX_train_out
+    state["IX_test"] = IX_test_out
+    return state
+
+
+def pca_legendre_transform(state, options, log):
+    # Derive and project onto MP signal PCs
+    L, V_tf, X_mean, X_std = mp_transform(state["IX_train"], False, False, log, hist=False)
+    state["IX_train"] = state["IX_train"].dot(V_tf)
+    state["IX_test"] = state["IX_test"].dot(V_tf)
+    #print L
+    #print np.average(state["IX_train"], axis=0)
+    #print np.std(state["IX_train"], axis=0)**2
+    #print "Max", np.max(state["IX_train"], axis=0)
+    #print "Min", np.min(state["IX_train"], axis=0)
+    # Renormalise descriptor as variance along components changed
+    state = rmt.normalise_descriptor_zscore(state, options, log)
+    #print np.average(state["IX_train"], axis=0)
+    #print np.std(state["IX_train"], axis=0)**2
+    #print "Max", np.max(state["IX_train"], axis=0)
+    #print "Min", np.min(state["IX_train"], axis=0)
+    # Apply Legendre mapping
+    # TODO Find better way how to deal with large x (those not easily scaled back to interval [-1,1])
+    max_degree = 6 # TODO Option
+    scale = 0.25 # ix -> ix*scale in units of sigma (= 1.0) # TODO Option
+    d = state["IX_train"].shape[1]
+    IX_train = state["IX_train"]
+    IX_test = state["IX_test"]
+    IX_train_out = np.zeros(
+        (state["IX_train"].shape[0], max_degree*d), 
+        dtype=state["IX_train"].dtype)
+    IX_test_out = np.zeros(
+        (state["IX_test"].shape[0], max_degree*d), 
+        dtype=state["IX_test"].dtype)
+    # In principle monomials x, x**2, x**3, ... should perform equivalently
+    legendre = [
+        lambda x: 1.0,                  # n = 0 (here not used)
+        lambda x: x,                    # n = 1
+        lambda x: 0.5*(3*x**2 - 1),     # ...
+        lambda x: 0.5*(5*x**3 - 3*x),
+        lambda x: 0.125*(35*x**4 - 30*x**2 + 3),
+        lambda x: 0.125*(63*x**5 - 70*x**3 + 15*x),
+        lambda x: 1./16.*(231*x**6 - 315*x**4 + 105*x**2 - 5),
+        lambda x: 1./16.*(429*x**7 - 693*x**5 + 315*x**3 - 35*x)
+    ]
+    for n in range(1, max_degree+1):
+        ix_train_n = legendre[n](scale*IX_train)
+        ix_test_n = legendre[n](scale*IX_test)
+        IX_train_out[:,(n-1)*d:n*d] = ix_train_n
+        IX_test_out[:,(n-1)*d:n*d] = ix_test_n
+    log << "Input dimension before legendre transform: d =" << d << log.endl 
+    log << "Output dimension after legendre transform: d'=" << IX_train_out.shape[1] << log.endl
+    log << "Standard deviation along components" << np.std(IX_train_out, axis=0) << log.endl
+    state["IX_train"] = IX_train_out
+    state["IX_test"] = IX_test_out
+    return state
+
+def hpcamp_moments_transform(state, options, log):
+    #R = np.random.randint(0, 2, size=state["IX_train"].shape[0]*state["IX_train"].shape[1])
+    #R = 1.*R.reshape(state["IX_train"].shape)
+    #norm = np.std(R, axis=0, keepdims=True)
+    #mean = np.sum(R, axis=0, keepdims=True)/R.shape[0]
+    #R = (R-mean)/norm
+    #print R
+    #print np.std(R, axis=0)
+    #print np.average(R, axis=0)
+    #L, V_tf, X_mean, X_std = mp_transform(R, False, False, log, hist=True)
+
+    #V_tf = hpcamp(state["IX_train"], options, log)
+    #L, V_tf, X_mean, X_std = mp_transform(state["IX_train"], False, False, log, hist=True)
+    #print "Mean, std", X_mean, X_std
+
+    T_train = state["T_train"]
+    T_test = state["T_test"]
+    IX_train = state["IX_train"]
+    IX_test = state["IX_test"]
+
+    np.set_printoptions(precision=2)
+
+    def split_mpf_target(IX, Y, levels, idcs=None, filters=[], this_level=1):
+        # Split threshold
+        y_split = np.average(Y)
+        y_min = np.min(Y)
+        y_max = np.max(Y)
+        if type(idcs) == type(None):
+            idcs = np.arange(IX.shape[0])
+        idcs_0 = np.where(Y <= y_split)
+        idcs_1 = np.where(Y > y_split)
+        IX_0 = IX[idcs_0]
+        IX_1 = IX[idcs_1]
+        Y_0 = Y[idcs_0]
+        Y_1 = Y[idcs_1]
+        # Lower partition
+        L_0, V_0, X_mean_0, X_std_0 = mp_transform(IX_0, True, True, log)
+        filters.append({ 
+            "idcs": idcs[idcs_0], "L": L_0, "n_filters": V_0.shape[1], 
+            "V": V_0, "mu": X_mean_0, "std": X_std_0, "y_min": y_min, "y_max": y_split, 
+            "partition": 0, "level": this_level })
+        # Upper partition
+        L_1, V_1, X_mean_1, X_std_1 = mp_transform(IX_1, True, True, log)
+        filters.append({ 
+            "idcs": idcs[idcs_1], "L": L_1, "n_filters": V_1.shape[1], 
+            "V": V_1, "mu": X_mean_1, "std": X_std_1, 
+            "y_min": y_split, "y_max": y_max, 
+            "partition": 1, "level": this_level })
+        # Descend into next level(s)
+        if this_level < levels:
+            filters = split_mpf_target(IX_0, Y_0, levels=levels, idcs=idcs[idcs_0], filters=filters, this_level=this_level+1)
+            filters = split_mpf_target(IX_1, Y_1, levels=levels, idcs=idcs[idcs_1], filters=filters, this_level=this_level+1)
+        return filters
+
+    filters = split_mpf_target(IX_train, T_train, levels=2)
+    for filter_ in filters:
+        print "level {level:d} #filters {n_filters:d} y in [{y_min:+1.4e} ,{y_max:+1.4e}]".format(**filter_)
+        if filter_["n_filters"] == 0: continue
+        IU = ((IX_train-filter_["mu"])/filter_["std"]).dot(filter_["V"])
+        print "Moments 1", IU.T.dot(T_train)/T_train.shape[0]/np.std(T_train)
+        print "Moments 2", (IU**2).T.dot(T_train)/T_train.shape[0]/np.std(T_train)
+        print "L", filter_["L"]
+        print "std-total", np.std(IU, axis=0)**2
+        IU = ((IX_train[filter_["idcs"]]-filter_["mu"])/filter_["std"]).dot(filter_["V"])
+        print "std", np.std(IU, axis=0)**2
+        print "avg", np.average(IU, axis=0)
+        raw_input('...')
+
+    assert False
+
+    IU_low = IX_low.dot(V_low)
+    IU_high = IX_high.dot(V_tf)
+    IU_train = state["IX_train"].dot(V_tf)
+    IU_test = state["IX_test"].dot(V_tf)
+
+    IU2_train = IU_train**2
+    IU2_test = IU_test**2
+
+    ofs = open('moments.txt', 'w')
+    for i in range(IU_train.shape[0]):
+        ofs.write('%s %+1.7e ' % (
+            "+" if T_train[i] > 0.0 else "-" , T_train[i]))
+        for j in range(IU_train.shape[1]):
+            ofs.write('%+1.7e ' % IU_train[i][j])
+        ofs.write('\n')
+    ofs.close()
+
+    print L
+    print np.std(IU_train, axis=0)**2
+    print np.std(IU_low, axis=0)**2
+    raw_input('...')
+
+    print np.average(T_train)
+    print np.std(T_train)
+    print np.average(T_test)
+    print np.std(T_test)
+    print state["t_average"]
+
+    t_moment_1 = IU_train.T.dot(T_train)/T_train.shape[0]
+    t_moment_2 = IU2_train.T.dot(T_train)/T_train.shape[0]
+
+    print "t_moments_1", t_moment_1
+    print "t_moments_2", t_moment_2
+
+    raw_input('MOMO')
 
 
 

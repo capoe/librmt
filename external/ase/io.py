@@ -81,11 +81,18 @@ def read(
 def write(
         config_file,
         configs):
+    if type(configs) != list:
+        configs = [ configs ]
     ofs = open(config_file, 'w')
     for c in configs:
         ofs.write('%d\n' % (len(c)))
         for k in sorted(c.info.keys()):
-            ofs.write('%s=%s ' % (k, c.info[k]))
+            # int or float?
+            if type(c.info[k]) not in [ unicode, str ]:
+                ofs.write('%s=%s ' % (k, c.info[k]))
+            # String
+            else:
+                ofs.write('%s="%s" ' % (k, c.info[k]))
         ofs.write('\n')
         for i in range(len(c)):
             ofs.write('%s %+1.4f %+1.4f %+1.4f\n' % (
