@@ -686,8 +686,20 @@ def clean_descriptor_pca(state, options, log):
     np.savetxt('out.pca_eigv.txt', L.diagonal())
     # TRANSFORM INTO PCA SPACE
     log << log.mg << "Project onto signal PCs" << log.endl
+
+    # TODO TODO TODO vvvv
     IZ_train = div0(IX_train - X_mean, X_std)
     IZ_test = div0(IX_test - X_mean, X_std)
+    #IZ_train = div0(IX_train, X_std)
+    #IZ_test = div0(IX_test, X_std)
+    #IZ_train = np.copy(IX_train)
+    #IZ_test = np.copy(IX_test)
+    #s_h = state["model"].s_h
+    #s_h = s_h/np.dot(s_h, s_h)**0.5
+    #V_signal = np.array([ s_h ]).T
+    # ^^^^^
+
+
     IZ_pc_signal_train = IZ_train.dot(V_signal)
     IZ_pc_signal_test = IZ_test.dot(V_signal)
     # SAVE STATE
@@ -720,7 +732,11 @@ def dist_mp(x, gamma):
         return ( (u - x)*(x - l) )**0.5 / (2*np.pi*gamma*x)
 
 def dist_mp_bounds(gamma):
-    return (1.-gamma**0.5)**2, (1.+gamma**0.5)**2
+    #return (1.-gamma**0.5)**2, (1.+gamma**0.5)**2
+    if gamma > 1.:
+        return 0.0, (1.+gamma**0.5)**2
+    else:
+        return (1.-gamma**0.5)**2, (1.+gamma**0.5)**2
 
 def dist_mp_sample(xs, gamma):
     ys = np.array([ dist_mp(x, gamma) for x in xs ])
