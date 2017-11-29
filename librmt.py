@@ -14,6 +14,8 @@ import csv
 import ising as ising
 import nonlinear as nonlinear
 import labs as labs
+import utils as utils
+import launch as launch
 from state import State
 from pipe import Pipe
 # External libraries
@@ -606,8 +608,8 @@ def clean_descriptor_pca_by_class(state, options, log):
         V_signal_all[:,i0:i1] = V_signal
         L_signal_all[i0:i1] = L_signal
         # Normalise & project
-        IZ_train = div0(state["IX_train"] - X_mean, X_std)
-        IZ_test = div0(state["IX_test"] - X_mean, X_std)
+        IZ_train = utils.div0(state["IX_train"] - X_mean, X_std)
+        IZ_test = utils.div0(state["IX_test"] - X_mean, X_std)
         IZ_pc_signal_train_class = IZ_train.dot(V_signal)
         IZ_pc_signal_test_class = IZ_test.dot(V_signal)
         # Store in "super"-descriptor
@@ -688,10 +690,10 @@ def clean_descriptor_pca(state, options, log):
     log << log.mg << "Project onto signal PCs" << log.endl
 
     # TODO TODO TODO vvvv
-    IZ_train = div0(IX_train - X_mean, X_std)
-    IZ_test = div0(IX_test - X_mean, X_std)
-    #IZ_train = div0(IX_train, X_std)
-    #IZ_test = div0(IX_test, X_std)
+    IZ_train = utils.div0(IX_train - X_mean, X_std)
+    IZ_test = utils.div0(IX_test - X_mean, X_std)
+    #IZ_train = utils.div0(IX_train, X_std)
+    #IZ_test = utils.div0(IX_test, X_std)
     #IZ_train = np.copy(IX_train)
     #IZ_test = np.copy(IX_test)
     #s_h = state["model"].s_h
@@ -753,19 +755,13 @@ def dist_mp_test():
     print int_, "+/-", err
     return
 
-def div0(a, b):
-    with np.errstate(divide='ignore', invalid='ignore'):
-        c = np.true_divide(a, b)
-        c[~np.isfinite(c)] = 0
-        return c
-
 def normalize_descriptor_zscore_deprecated(IX, ddof_=1):
     # Rows of x are individual observations
     mu = np.mean(IX, axis=0)
     muTile = np.tile(mu, (IX.shape[0],1))
     std = np.std(IX, axis=0, ddof=ddof_)
     stdTile = np.tile(std, (IX.shape[0], 1))
-    IZ = div0(IX - muTile, stdTile)
+    IZ = utils.div0(IX - muTile, stdTile)
     return IZ, mu, std
 
 def normalise_descriptor_zscore(state, options, log):
@@ -781,8 +777,8 @@ def normalise_descriptor_zscore(state, options, log):
         X_std = np.std(IX_train, axis=0, ddof=1)
         log << "Mean min max:" << np.min(X_mean) << np.max(X_mean) << log.endl
         log << "Std  min max:" << np.min(X_std) << np.max(X_std) << log.endl
-        IX_train_norm = div0(IX_train - X_mean, X_std)
-        IX_test_norm = div0(IX_test - X_mean, X_std)
+        IX_train_norm = utils.div0(IX_train - X_mean, X_std)
+        IX_test_norm = utils.div0(IX_test - X_mean, X_std)
         # Store
         state.register("clean_descriptor_zscore", options)
         state["IX_train"] = IX_train_norm
@@ -808,7 +804,7 @@ def pca_compute(IX, log=None, norm_div_std=True, norm_sub_mean=True, ddof=1, eps
         X_mean = 0.0
     if norm_div_std:
         #IX_norm = IX_norm/(X_std+eps)
-        IX_norm = div0(IX_norm, X_std+eps)
+        IX_norm = utils.div0(IX_norm, X_std+eps)
     else:
         X_std = 1.0
     # Correlation matrix
@@ -847,13 +843,10 @@ def split_test_train(state, options, log):
         seed = None
     log << log.mg << "Split onto training and test set" << log.endl
     # Read options
-    f_train = options["f_train"]
     subsample_method = options["method"]
     # Calc n_train, n_test
     IX = state["IX"]
     n_samples = IX.shape[0]
-    n_train = int(f_train*n_samples+0.5)
-    n_test = n_samples - n_train
     # Use decision fct?
     if "decision_fct" in options and options["decision_fct"] != None:
         log << "Using decision function" << log.endl
@@ -865,6 +858,9 @@ def split_test_train(state, options, log):
                 idcs_test.append(idx)
             else: idcs_train.append(idx)
     elif subsample_method in ["stride", "random"]:
+        f_train = options["f_train"]
+        n_train = int(f_train*n_samples+0.5)
+        n_test = n_samples - n_train
         log << "Method:" << subsample_method
         if subsample_method == "stride":
             log << "(stride = %d)" % stride_shift

@@ -6,24 +6,33 @@ import json
 import math
 import scipy.cluster.hierarchy as sch
 
+VERBOSE = False
+
+# =======================
+# HIERARCHICAL CLUSTERING
+# =======================
+
 def hierarchical_clustering(
         distance_matrix,
         min_size=2,
+        method='centroid',
         log=None, 
         verbose=False):
     # Compute linkage matrix L:
     # L[i] = [ c1, c2, d12, n12 ] 
     # Read this as: cluster i merged from clusters c1 and c2, 
     # with cluster distance d12, and number of member nodes n12
-    if log: log << "Hierarchical clustering ..." << log.flush
     N = distance_matrix.shape[0]
     ii = np.triu_indices(N, k=1) # upper triangle without diagonal
     distances_compressed = distance_matrix[ii]
+    if log: log << "Hierarchical clustering ..." << log.endl
+    #distances_compressed = np.random.uniform(size=distances_compressed.shape) # HACK
     #L = sch.linkage(distance_matrix, method='centroid') # NOTE BUG: Distance matrix not interpreted as such!!
-    L = sch.linkage(distances_compressed, method='centroid', metric="*should not be used*")
-    if log: log << "done." << log.endl
+    #L = sch.linkage(distances_compressed, method='single') #, method='centroid', metric="*should not be used*")
+    L = sch.linkage(distances_compressed, method='centroid') #, method='centroid', metric="*should not be used*")
+    if log: log << "... done." << log.endl
     # Unwrap clusters from linkage matrix
-    if log: log << "Unwrapping clusters ..." << log.flush
+    if log: log << "Unwrapping clusters ..." << log.endl
     clusters = []
     # Add leaf nodes as single-node clusters
     for i in range(distance_matrix.shape[0]):
@@ -53,7 +62,7 @@ def hierarchical_clustering(
             log << clusters[p0]["nodes"] << log.endl
             log << clusters[p1]["nodes"] << log.endl
             log << "Cluster" << cidx << len(clusters[cidx]["nodes"]) << clusters[cidx]["nodes"] << log.endl
-    if log: log << "done." << log.endl
+    if log: log << "... done." << log.endl
     clusters = sorted(clusters, key=lambda c: c["len"])
     if verbose and log:
         for cidx, c in enumerate(clusters):
@@ -96,21 +105,89 @@ def dendrogram_plot(D, tags):
     fig.show()
     fig.savefig('dendrogram.svg')
 
-def normalise_ix(state, options, log):
-    norm = np.std(state["IX_train"], axis=0, keepdims=True)
-    mean = np.sum(state["IX_train"], axis=0, keepdims=True)/state["IX_train"].shape[0]
-    state["IX_train"] = (state["IX_train"]-mean)/norm
-    state["IX_test"] = (state["IX_test"]-mean)/norm
-    #norm = np.std(state["IX_train"], axis=0, keepdims=True)
-    #mean = np.sum(state["IX_train"], axis=0, keepdims=True)/state["IX_train"].shape[0]
-    #print norm
-    #print mean
-    return state
+def fps(D, n_select, i0):
+    # Farthest-point sampling of a total of n_select points 
+    # with seed indices i0 and distance matrix D
+    if type(i0) != list: i0 = [ i0 ]
+    mask = np.zeros((D.shape[0],), 'bool')
+    idcs_selected = i0
+    distances = [ 0.0 for i in range(len(i0)) ]
+    for i in range(n_select-len(i0)):
+        D_red = D[idcs_selected]
+        D_avg = np.average(D_red, axis=0)
+        idcs = np.argsort(D_avg)[::-1]
+        for j in idcs:
+            if j in idcs_selected:
+                pass
+            else:
+                idcs_selected.append(j)
+                distances.append(D_avg[j])
+                break
+    mask[idcs_selected] = True
+    return idcs_selected, np.where(mask == False)[0], distances
 
-def threshold_ix(state, options, log):
-    raise NotImplementedError()
-    stds = np.std(state["IX_train"], axis=0)
-    return state
+def split_mpf_target(IX, Y, levels, 
+        min_interval, mp_mode="mp", mp_options={}, idcs=None, 
+        filters=[], this_level=1, split="average", log=None):
+    # Split threshold
+    if split == "average":
+        y_split = np.average(Y)
+    elif split == "median":
+        y_split = np.median(Y)
+    else: assert False # 'median' or 'average'
+    y_min = np.min(Y)
+    y_max = np.max(Y)
+    if y_max - y_min < min_interval: return filters
+    if type(idcs) == type(None):
+        idcs = np.arange(IX.shape[0])
+    idcs_0 = np.where(Y <= y_split)
+    idcs_1 = np.where(Y > y_split)
+    IX_0 = IX[idcs_0]
+    IX_1 = IX[idcs_1]
+    Y_0 = Y[idcs_0]
+    Y_1 = Y[idcs_1]
+    if log:
+        log << "   "*(this_level-1) + "Level %d: analysing split @ %+1.2f  [%4d, %4d]" % (this_level, y_split, IX_0.shape[0], IX_1.shape[0]) << log.endl
+    if IX_0.shape[0] < 2 or IX_1.shape[0] < 2:
+        return filters
+    IX_0, X_mean_0, X_std_0 = rmt.utils.zscore(IX_0)
+    IX_1, X_mean_1, X_std_1 = rmt.utils.zscore(IX_1)
+    if mp_mode == "mp":
+        # Lower partition
+        L_0, V_0, _X_mean_0, _X_std_0 = mp_transform(IX_0, False, False, log)
+        # Upper partition
+        L_1, V_1, _X_mean_1, _X_std_1 = mp_transform(IX_1, False, False, log)
+    elif mp_mode == "hmp": 
+        V_0 = hpcamp(IX_0, mp_options, log=log if VERBOSE else None)
+        L_0 = np.array([])
+        V_1 = hpcamp(IX_1, mp_options, log=log if VERBOSE else None)
+        L_1 = np.array([])
+    else: raise NotImplementedError(mp_mode)
+    # NOTE HACK TO CHECK THAT/WHETHER PCs ARE A BETTER CHOICE THAN RANDOM VECTORS
+    #V_0 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
+    #V_1 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
+    filters.append({ 
+        "idcs": idcs[idcs_0], "L": L_0, "n_filters": V_0.shape[1], 
+        "V": V_0, "mu": X_mean_0, "std": X_std_0, "y_min": y_min, "y_max": y_split, 
+        "partition": 0, "level": this_level })
+    filters.append({ 
+        "idcs": idcs[idcs_1], "L": L_1, "n_filters": V_1.shape[1], 
+        "V": V_1, "mu": X_mean_1, "std": X_std_1, 
+        "y_min": y_split, "y_max": y_max, 
+        "partition": 1, "level": this_level })
+    # Descend into next level(s)
+    if this_level < levels:
+        filters = split_mpf_target(IX_0, Y_0, mp_mode=mp_mode, split=split,
+            mp_options=mp_options, levels=levels, min_interval=min_interval, 
+            idcs=idcs[idcs_0], filters=filters, this_level=this_level+1, log=log)
+        filters = split_mpf_target(IX_1, Y_1, mp_mode=mp_mode, split=split,
+            mp_options=mp_options, levels=levels, min_interval=min_interval, 
+            idcs=idcs[idcs_1], filters=filters, this_level=this_level+1, log=log)
+    return filters
+
+# =========
+# FILTERING
+# =========
 
 def mp_transform(IX, norm_avg, norm_std, log, hist=False):
     # Computes MP thresholded PC space based on cov(IX)
@@ -140,33 +217,6 @@ def mp_transform(IX, norm_avg, norm_std, log, hist=False):
         np.savetxt('out.pca_eigv.txt', L.diagonal())
     return L_signal, V_signal, X_mean, X_std
 
-def fps(D, n_select, i0):
-    # Farthest-point sampling of a total of n_select points 
-    # with seed indices i0 and distance matrix D
-    if type(i0) != list: i0 = [ i0 ]
-    mask = np.zeros((D.shape[0],), 'bool')
-    idcs_selected = i0
-    distances = [ 0.0 for i in range(len(i0)) ]
-    for i in range(n_select-len(i0)):
-        D_red = D[idcs_selected]
-        D_avg = np.average(D_red, axis=0)
-        idcs = np.argsort(D_avg)[::-1]
-        for j in idcs:
-            if j in idcs_selected:
-                pass
-            else:
-                idcs_selected.append(j)
-                distances.append(D_avg[j])
-                break
-    mask[idcs_selected] = True
-    return idcs_selected, np.where(mask == False)[0], distances
-
-def binomial_coeff(n, k):
-    b = 1.
-    for i in range(1, k+1):
-        b *= (n+1-i)/i
-    return b
-
 def hpcamp(IX, options, log):
     # PARAMETERS
     # - target subspace dimension ("take")
@@ -177,9 +227,13 @@ def hpcamp(IX, options, log):
     # ... subspace overlap (angle between subspace directors)
     # ... eigenvalue magnitude (difference?)
     # OPTIONS
-    file_debug = True
-    verbose = False
+    file_debug = False
+    verbose = False if log else False
     options = options["hpcamp_transform"]
+    if "hc_method" in options:
+        hc_method = options["hc_method"]
+    else:
+        hc_method = "centroid"
     min_cluster_size = options["min_cluster_size"]
     take = options["target_dim"]
     k_c_max = options["cluster_similarity_threshold"]
@@ -197,7 +251,7 @@ def hpcamp(IX, options, log):
     covmat = np.cov(IX, rowvar=False, ddof=0)
     dmat = (1. - covmat**2)
     clusters_all = hierarchical_clustering(
-        distance_matrix=dmat, min_size=1, log=log, verbose=False)
+        distance_matrix=dmat, min_size=1, method=hc_method, log=log, verbose=False)
     clusters = filter(lambda c: len(c["nodes"]) >= min_cluster_size, clusters_all)
     # Calculate cluster subspace similarity matrix
     C = np.zeros((len(clusters), IX.shape[1]), dtype='float64')
@@ -266,7 +320,7 @@ def hpcamp(IX, options, log):
             filter_lambdas.append(L[j])
             filter_cluster.append(cluster["idx"])
             cluster["filters"].append(off+j)
-        log << "Cluster %4d [%4d]    gamma*=%1.3f fss*=%1.2f d*=%4d    %4d filters" % (cidx, cluster["idx"], gamma, fss, n_fss, len(filter_idcs)) << log.endl
+        if log: log << "Cluster %4d [%4d]    gamma*=%1.3f fss*=%1.2f d*=%4d    %4d filters" % (cidx, cluster["idx"], gamma, fss, n_fss, len(filter_idcs)) << log.endl
         #log << "@fss=%+1.2f <> @gamma=%+1.2f: generated %d filters" % (fss, float(n_fss)/N, len(filter_idcs)) << log.endl
     # ASSEMBLE FILTER MATRIX
     n_filters = len(filter_idcs)
@@ -338,10 +392,11 @@ def hpcamp(IX, options, log):
                 print seq
             sequences.append(seq)
         sequences = sorted(sequences, key=lambda s: len(s))
-        log << "Have %d filter sequences" % (len(sequences)) << log.endl
-        for idx, seq in enumerate(sequences):
-            log << len(seq)
-        log << log.endl
+        if log: 
+            log << "Have %d filter sequences" % (len(sequences)) << log.endl
+            for idx, seq in enumerate(sequences):
+                log << len(seq)
+            log << log.endl
         if file_debug:
             ofs = open('sequences.txt', 'w')
             sizes = [ len(f) for f in filter_idcs ]
@@ -424,6 +479,10 @@ def hpcamp(IX, options, log):
         raise RuntimeError()
     return V_tf
 
+# ================
+# STATE TRANSFORMS
+# ================
+
 def hpcamp_transform(state, options, log):
     # Transform
     V_tf = hpcamp(state["IX_train"], options, log)
@@ -438,65 +497,28 @@ def hpcamp_transform(state, options, log):
     log.prefix = log.prefix[0:-7]
     return state
 
-def upconvert_descriptor_matrix(IX, concatenate):
-    D = IX.shape[1]
-    D2 = D*(D+1)/2
-    idcs_upper = np.triu_indices(D)
-    IX_up = np.zeros((IX.shape[0], D+D2), dtype=IX.dtype)
-    IX_up[:,0:D] = IX
-    for i in range(IX.shape[0]):
-        IX_up[i,D:] = np.outer(IX[i], IX[i])[idcs_upper]
-    return IX_up
-
-def hpcamp_transform_concat(state, options, log):
-    # Options
-    upconvert = options["hpcamp_transform"]["upconvert"]
-    upconvert_concatenate = True
-    concatenate = options["hpcamp_transform"]["concatenate"]
-    # Transform
-    V_tf = hpcamp(state["IX_train"], options, log)
-    # Project
-    IU_train = state["IX_train"].dot(V_tf)
-    IU_test = state["IX_test"].dot(V_tf)
-    # Upconvert?
-    if upconvert:
-        log << "Upconverting transformed descriptor (concatenate: %s)..." % upconvert_concatenate << log.endl
-        IU_train = upconvert_descriptor_matrix(IU_train, concatenate=upconvert_concatenate)
-        IU_test = upconvert_descriptor_matrix(IU_test, concatenate=upconvert_concatenate)
-    # Concatenate?
-    if concatenate:
-        log << "Concatenating descriptor ..." << log.endl
-        IX_train = np.zeros((state["IX_train"].shape[0], state["IX_train"].shape[1]+IU_train.shape[1]), IU_train.dtype)
-        IX_test = np.zeros((state["IX_test"].shape[0], state["IX_test"].shape[1]+IU_test.shape[1]), IU_test.dtype)
-        IX_train[:,0:state["IX_train"].shape[1]] = state["IX_train"]
-        IX_train[:,state["IX_train"].shape[1]:] = IU_train
-        IX_test[:,0:state["IX_test"].shape[1]] = state["IX_test"]
-        IX_test[:,state["IX_test"].shape[1]:] = IU_test
-    else:
-        IX_train = IU_train
-        IX_test = IU_test
-    log << "Transformed descriptor dimension:" << IX_train.shape[1] << log.endl
-    # Store
-    state["IX_train"] = IX_train
-    state["IX_test"] = IX_test
-    log.prefix = log.prefix[0:-7]
-    return state
-
-
-def polympf_transform(state, options, log):
-
-    # TODO Concatenate with linear descriptor
-    # TODO Set legendre cutoff and options
+def hca_mp_transform(state, options, log):
     # TODO Handle sparsification
+    min_size_cluster_y = options["hca_mp_transform"]["min_cluster_size"]
+    min_std_cluster_y = options["hca_mp_transform"]["min_cluster_std"] # relative to std-dev of all targets
+    k_c_max_y = options["hca_mp_transform"]["max_cluster_sim"]
+    # MP method
+    deep_mp = options["hca_mp_transform"]["deep_mp"]
+    # Cluster origins as filters?
+    append_filter_centres = options["hca_mp_transform"]["append_filter_centres"]
+    msd_threshold_k = options["hca_mp_transform"]["msd_threshold_coeff"]
 
-    min_size_cluster_y = 10 # TODO Option
-    min_std_cluster_y = 0.1 # relative to std-dev of all targets
-    k_c_max_y = 0.9
-    msd_threshold_k = 3
-    deep_mp = False
+    verbose = False
+    np.set_printoptions(precision=2)
+
+    # POST-PROCESS OPTIONS
+    IX = state["IX_train"]
+    Y = state["T_train"]
+    if min_size_cluster_y == None:
+        min_size_cluster_y = int(0.1*IX.shape[0]+0.5)
     options_deep_mp = {
         # Clustering
-        "min_cluster_size": 10,
+        "min_cluster_size": int(0.1*IX.shape[1]+0.5),
         "cluster_similarity_threshold": 0.9,
         # Sequencing
         "sparsify": "sequence", # "sequence" or "fps"
@@ -510,11 +532,6 @@ def polympf_transform(state, options, log):
         "upconvert": True,
         "concatenate": True
     }
-    verbose = False
-    np.set_printoptions(precision=2)
-
-    IX = state["IX_train"]
-    Y = state["T_train"]
 
     # DESCRIPTOR DISTRIBUTION MOMENTS FOR LATER USE
     assert np.sum(np.sum(IX, axis=0)**2) < 1e-10 # Need to centre descriptor first before using this transformation
@@ -591,25 +608,26 @@ def polympf_transform(state, options, log):
         filter_mu = np.average(IX_ss, axis=0)
         filter_std = np.std(IX_ss, axis=0)
         IX_ss = (IX_ss - filter_mu) #/filter_std
-        IX_ss = rmt.div0(IX_ss, filter_std)
+        IX_ss = rmt.utils.div0(IX_ss, filter_std)
         cluster["filter_mu"] = filter_mu
         cluster["filter_std"] = filter_std
 
         # TEST DISTANCE FROM ORIGIN
-        filter_centre_msd = filter_mu.dot(filter_mu)
-        log << "Filter centre msd" << filter_centre_msd << log.endl
-        def sample_variance(d, N, s2, s4):
-            return np.sum(1./N*s2), np.sum( (s4 - 3*s2*s2)/N**3 + 2*s2*s2/N**2)
-        msd, msd_var = sample_variance(
-            IX_ss.shape[1], IX_ss.shape[0], x_moment_2, x_moment_4)
-        # Add as filter if MSD deemed significant
-        filter_centre_msd_threshold = msd + msd_threshold_k*msd_var**0.5
-        log << "Centre MSD threshold" << filter_centre_msd_threshold << log.endl
-        l0, l1 = rmt.dist_mp_bounds(float(IX_ss.shape[1])/IX_ss.shape[0])
-        filter_centre_msd_threshold_mp = l1
-        log << "Centre MSD threshold (MP)" << filter_centre_msd_threshold_mp << log.endl
-        if filter_centre_msd >= filter_centre_msd_threshold:
-            cluster_centre_filters.append(filter_mu)
+        if append_filter_centres:
+            filter_centre_msd = filter_mu.dot(filter_mu)
+            log << "Filter centre msd" << filter_centre_msd << log.endl
+            def sample_variance(d, N, s2, s4):
+                return np.sum(1./N*s2), np.sum( (s4 - 3*s2*s2)/N**3 + 2*s2*s2/N**2)
+            msd, msd_var = sample_variance(
+                IX_ss.shape[1], IX_ss.shape[0], x_moment_2, x_moment_4)
+            # Add as filter if MSD deemed significant
+            filter_centre_msd_threshold = msd + msd_threshold_k*msd_var**0.5
+            log << "Centre MSD threshold" << filter_centre_msd_threshold << log.endl
+            l0, l1 = rmt.dist_mp_bounds(float(IX_ss.shape[1])/IX_ss.shape[0])
+            filter_centre_msd_threshold_mp = l1
+            log << "Centre MSD threshold (MP)" << filter_centre_msd_threshold_mp << log.endl
+            if filter_centre_msd >= filter_centre_msd_threshold:
+                cluster_centre_filters.append(filter_mu)
 
         # EXTRACT FILTERS FROM SLICED DATA MATRIX
         if deep_mp:
@@ -617,6 +635,7 @@ def polympf_transform(state, options, log):
                 IX=IX_ss,
                 options={ "hpcamp_transform": options_deep_mp },
                 log=log)
+            cluster["filters"] = V
         else:
             L, V, mu, std = mp_transform(
                 IX=IX_ss,
@@ -654,8 +673,10 @@ def polympf_transform(state, options, log):
     IX_train_out = []
     IX_test_out = []
     for n in range(V_tf.shape[0]):
-        ix_train = ((state["IX_train"]-mu_tf[n])/std_tf[n]).dot(V_tf[n])
-        ix_test = ((state["IX_test"]-mu_tf[n])/std_tf[n]).dot(V_tf[n])
+        #ix_train = ((state["IX_train"]-mu_tf[n])/std_tf[n]).dot(V_tf[n])
+        ix_train = rmt.utils.div0(state["IX_train"]-mu_tf[n], std_tf[n]).dot(V_tf[n])
+        #ix_test = ((state["IX_test"]-mu_tf[n])/std_tf[n]).dot(V_tf[n])
+        ix_test = rmt.utils.div0(state["IX_test"]-mu_tf[n], std_tf[n]).dot(V_tf[n])
         IX_train_out.append(ix_train)
         IX_test_out.append(ix_test)
     state["IX_train"] = np.array(IX_train_out).T
@@ -663,227 +684,174 @@ def polympf_transform(state, options, log):
 
     # RENORMALISE
     state = rmt.normalise_descriptor_zscore(state, options, log)
-    print np.std(state["IX_train"], axis=0)
-    print np.average(state["IX_train"], axis=0)
-    print np.std(state["IX_test"], axis=0)
-
-    state = legendre_transform(state, options, log)
-
-    raw_input('___')
     return state
 
 def legendre_transform(state, options, log):
+    log << log.mg << "Applying Legendre polynomial mapping" << log.endl
     # Apply Legendre mapping
-    max_degree = 6 # TODO Option
-    scale = 0.25 # ix -> ix*scale in units of sigma (= 1.0) # TODO Option
+    min_degree = options["legendre_transform"]["min_degree"] 
+    max_degree = options["legendre_transform"]["max_degree"] 
+    basis_type = options["legendre_transform"]["basis_type"]
+    log << "Min degree, max degree =" << min_degree << "," << max_degree << log.endl
+    # vvv TODO Is there a more elegant solution to this?
+    scale = options["legendre_transform"]["scale"] # ix -> ix*scale in units of sigma (= 1.0)
+    # ^^^
     d = state["IX_train"].shape[1]
+    n_degree = max_degree-min_degree+1
     IX_train = state["IX_train"]
     IX_test = state["IX_test"]
     IX_train_out = np.zeros(
-        (state["IX_train"].shape[0], max_degree*d), 
+        (state["IX_train"].shape[0], n_degree*d), 
         dtype=state["IX_train"].dtype)
     IX_test_out = np.zeros(
-        (state["IX_test"].shape[0], max_degree*d), 
+        (state["IX_test"].shape[0], n_degree*d), 
         dtype=state["IX_test"].dtype)
     # In principle monomials x, x**2, x**3, ... should perform equivalently
-    legendre = [
-        lambda x: 1.0,                  # n = 0 (here not used)
-        lambda x: x,                    # n = 1
-        lambda x: 0.5*(3*x**2 - 1),     # ...
-        lambda x: 0.5*(5*x**3 - 3*x),
-        lambda x: 0.125*(35*x**4 - 30*x**2 + 3),
-        lambda x: 0.125*(63*x**5 - 70*x**3 + 15*x),
-        lambda x: 1./16.*(231*x**6 - 315*x**4 + 105*x**2 - 5),
-        lambda x: 1./16.*(429*x**7 - 693*x**5 + 315*x**3 - 35*x)
-    ]
-    for n in range(1, max_degree+1):
-        ix_train_n = legendre[n](scale*IX_train)
-        ix_test_n = legendre[n](scale*IX_test)
-        IX_train_out[:,(n-1)*d:n*d] = ix_train_n
-        IX_test_out[:,(n-1)*d:n*d] = ix_test_n
+    if basis_type == "legendre":
+        legendre = [
+            lambda x: 1.0,                  # n = 0 (here not used)
+            lambda x: x,                    # n = 1
+            lambda x: 0.5*(3*x**2 - 1),     # ...
+            lambda x: 0.5*(5*x**3 - 3*x),
+            lambda x: 0.125*(35*x**4 - 30*x**2 + 3),
+            lambda x: 0.125*(63*x**5 - 70*x**3 + 15*x),
+            lambda x: 1./16.*(231*x**6 - 315*x**4 + 105*x**2 - 5),
+            lambda x: 1./16.*(429*x**7 - 693*x**5 + 315*x**3 - 35*x)
+        ]
+    elif basis_type == "monomial":
+        legendre = [
+            lambda x: 1.0,                  # n = 0 (here not used)
+            lambda x: x,                    # n = 1
+            lambda x: x**2,
+            lambda x: x**3,
+            lambda x: x**4,
+            lambda x: x**5,
+            lambda x: x**6,
+            lambda x: x**7
+        ]
+    else: assert False
+    for n_degree in range(min_degree, max_degree+1):
+        n = n_degree - min_degree
+        ix_train_n = legendre[n_degree](scale*IX_train)
+        ix_test_n = legendre[n_degree](scale*IX_test)
+        IX_train_out[:,n*d:(n+1)*d] = ix_train_n
+        IX_test_out[:,n*d:(n+1)*d] = ix_test_n
     log << "Input dimension before legendre transform: d =" << d << log.endl 
     log << "Output dimension after legendre transform: d'=" << IX_train_out.shape[1] << log.endl
-    log << "Standard deviation along components" << np.std(IX_train_out, axis=0) << log.endl
+    std = np.std(IX_train_out, axis=0)
+    log << "Standard deviation along components: min=%+1.2e avg=%+1.2e max=%+1.2e" % (np.min(std), np.average(std), np.max(std)) << log.endl
+    if VERBOSE:
+        log << "Standard deviation along components" << std << log.endl
     state["IX_train"] = IX_train_out
     state["IX_test"] = IX_test_out
     return state
 
-
-def pca_legendre_transform(state, options, log):
-    # Derive and project onto MP signal PCs
-    L, V_tf, X_mean, X_std = mp_transform(state["IX_train"], False, False, log, hist=False)
-    state["IX_train"] = state["IX_train"].dot(V_tf)
-    state["IX_test"] = state["IX_test"].dot(V_tf)
-    #print L
-    #print np.average(state["IX_train"], axis=0)
-    #print np.std(state["IX_train"], axis=0)**2
-    #print "Max", np.max(state["IX_train"], axis=0)
-    #print "Min", np.min(state["IX_train"], axis=0)
-    # Renormalise descriptor as variance along components changed
-    state = rmt.normalise_descriptor_zscore(state, options, log)
-    #print np.average(state["IX_train"], axis=0)
-    #print np.std(state["IX_train"], axis=0)**2
-    #print "Max", np.max(state["IX_train"], axis=0)
-    #print "Min", np.min(state["IX_train"], axis=0)
-    # Apply Legendre mapping
-    # TODO Find better way how to deal with large x (those not easily scaled back to interval [-1,1])
-    max_degree = 6 # TODO Option
-    scale = 0.25 # ix -> ix*scale in units of sigma (= 1.0) # TODO Option
-    d = state["IX_train"].shape[1]
-    IX_train = state["IX_train"]
-    IX_test = state["IX_test"]
-    IX_train_out = np.zeros(
-        (state["IX_train"].shape[0], max_degree*d), 
-        dtype=state["IX_train"].dtype)
-    IX_test_out = np.zeros(
-        (state["IX_test"].shape[0], max_degree*d), 
-        dtype=state["IX_test"].dtype)
-    # In principle monomials x, x**2, x**3, ... should perform equivalently
-    legendre = [
-        lambda x: 1.0,                  # n = 0 (here not used)
-        lambda x: x,                    # n = 1
-        lambda x: 0.5*(3*x**2 - 1),     # ...
-        lambda x: 0.5*(5*x**3 - 3*x),
-        lambda x: 0.125*(35*x**4 - 30*x**2 + 3),
-        lambda x: 0.125*(63*x**5 - 70*x**3 + 15*x),
-        lambda x: 1./16.*(231*x**6 - 315*x**4 + 105*x**2 - 5),
-        lambda x: 1./16.*(429*x**7 - 693*x**5 + 315*x**3 - 35*x)
-    ]
-    for n in range(1, max_degree+1):
-        ix_train_n = legendre[n](scale*IX_train)
-        ix_test_n = legendre[n](scale*IX_test)
-        IX_train_out[:,(n-1)*d:n*d] = ix_train_n
-        IX_test_out[:,(n-1)*d:n*d] = ix_test_n
-    log << "Input dimension before legendre transform: d =" << d << log.endl 
-    log << "Output dimension after legendre transform: d'=" << IX_train_out.shape[1] << log.endl
-    log << "Standard deviation along components" << np.std(IX_train_out, axis=0) << log.endl
-    state["IX_train"] = IX_train_out
-    state["IX_test"] = IX_test_out
-    return state
-
-def hpcamp_moments_transform(state, options, log):
-    #R = np.random.randint(0, 2, size=state["IX_train"].shape[0]*state["IX_train"].shape[1])
-    #R = 1.*R.reshape(state["IX_train"].shape)
-    #norm = np.std(R, axis=0, keepdims=True)
-    #mean = np.sum(R, axis=0, keepdims=True)/R.shape[0]
-    #R = (R-mean)/norm
-    #print R
-    #print np.std(R, axis=0)
-    #print np.average(R, axis=0)
-    #L, V_tf, X_mean, X_std = mp_transform(R, False, False, log, hist=True)
-
-    #V_tf = hpcamp(state["IX_train"], options, log)
-    #L, V_tf, X_mean, X_std = mp_transform(state["IX_train"], False, False, log, hist=True)
-    #print "Mean, std", X_mean, X_std
-
+def binary_y_tree_mp_transform(state, options, log):
+    log << log.mg << "Binary y-tree MP transform" << log.endl
+    n_levels = options["binary_y_tree_mp_transform"]["n_levels"]
+    std_scale = options["binary_y_tree_mp_transform"]["min_interval"]
+    mp_mode = options["binary_y_tree_mp_transform"]["mp_mode"]
+    split = options["binary_y_tree_mp_transform"]["split"]
+    verbose = False
     T_train = state["T_train"]
     T_test = state["T_test"]
     IX_train = state["IX_train"]
     IX_test = state["IX_test"]
+    
+    # CALCULATE OPTIONS FOR TREE-BASED MPF
+    if mp_mode == "hmp":
+        min_clust_size = int(0.1*IX_train.shape[1]+0.5)
+        if min_clust_size < 2:
+            min_clust_size = 2
+        log << "MP mode '%s':" % mp_mode << "setting min_cluster_size=%d" % (min_clust_size) << log.endl
+        mp_options = { 
+          "hpcamp_transform": {
+            # Clustering
+            "min_cluster_size": min_clust_size,
+            "cluster_similarity_threshold": 0.9,
+            # Sequencing
+            "sparsify": "sequence", # "sequence" or "fps"
+            "filter_seq_sim_cutoff": 0.9, # 0.71,
+            "sequence_select": [0], # [0] or [ 0, -1 ]
+            # FPS
+            "do_fps": False,
+            "fps_root": "largest_pc", # "largest_cluster"
+            "target_dim": 30 } }
+    else:
+        mp_options = {}
 
-    np.set_printoptions(precision=2)
-
-    def split_mpf_target(IX, Y, levels, idcs=None, filters=[], this_level=1):
-        # Split threshold
-        y_split = np.average(Y)
-        y_min = np.min(Y)
-        y_max = np.max(Y)
-        if type(idcs) == type(None):
-            idcs = np.arange(IX.shape[0])
-        idcs_0 = np.where(Y <= y_split)
-        idcs_1 = np.where(Y > y_split)
-        IX_0 = IX[idcs_0]
-        IX_1 = IX[idcs_1]
-        Y_0 = Y[idcs_0]
-        Y_1 = Y[idcs_1]
-        # Lower partition
-        L_0, V_0, X_mean_0, X_std_0 = mp_transform(IX_0, True, True, log)
-        filters.append({ 
-            "idcs": idcs[idcs_0], "L": L_0, "n_filters": V_0.shape[1], 
-            "V": V_0, "mu": X_mean_0, "std": X_std_0, "y_min": y_min, "y_max": y_split, 
-            "partition": 0, "level": this_level })
-        # Upper partition
-        L_1, V_1, X_mean_1, X_std_1 = mp_transform(IX_1, True, True, log)
-        filters.append({ 
-            "idcs": idcs[idcs_1], "L": L_1, "n_filters": V_1.shape[1], 
-            "V": V_1, "mu": X_mean_1, "std": X_std_1, 
-            "y_min": y_split, "y_max": y_max, 
-            "partition": 1, "level": this_level })
-        # Descend into next level(s)
-        if this_level < levels:
-            filters = split_mpf_target(IX_0, Y_0, levels=levels, idcs=idcs[idcs_0], filters=filters, this_level=this_level+1)
-            filters = split_mpf_target(IX_1, Y_1, levels=levels, idcs=idcs[idcs_1], filters=filters, this_level=this_level+1)
-        return filters
-
-    filters = split_mpf_target(IX_train, T_train, levels=2)
+    # RECURSIVELY (=HIERARCHICALLY) APPLY MP FILTERING TO DATASET
+    filters = split_mpf_target(IX_train, T_train, 
+        min_interval=std_scale*np.std(T_train), 
+        split=split,
+        levels=n_levels, 
+        mp_mode=mp_mode,
+        mp_options=mp_options,
+        log=log)
+    IUs_train = []
+    IUs_test = []
+    IVs = []
     for filter_ in filters:
-        print "level {level:d} #filters {n_filters:d} y in [{y_min:+1.4e} ,{y_max:+1.4e}]".format(**filter_)
+        # TODO Add filter centres "mu" as filters?
+        log << "level:partition {level:02d}:{partition:02d}   # filters {n_filters:2d}   y-bounds [{y_min:+1.2f}, {y_max:+1.2f}]".format(**filter_) << log.endl
         if filter_["n_filters"] == 0: continue
-        IU = ((IX_train-filter_["mu"])/filter_["std"]).dot(filter_["V"])
-        print "Moments 1", IU.T.dot(T_train)/T_train.shape[0]/np.std(T_train)
-        print "Moments 2", (IU**2).T.dot(T_train)/T_train.shape[0]/np.std(T_train)
-        print "L", filter_["L"]
-        print "std-total", np.std(IU, axis=0)**2
-        IU = ((IX_train[filter_["idcs"]]-filter_["mu"])/filter_["std"]).dot(filter_["V"])
-        print "std", np.std(IU, axis=0)**2
-        print "avg", np.average(IU, axis=0)
-        raw_input('...')
+        IU_train = rmt.utils.div0(IX_train-filter_["mu"], filter_["std"]).dot(filter_["V"])
+        IU_test = rmt.utils.div0(IX_test-filter_["mu"], filter_["std"]).dot(filter_["V"])
+        #IU_train = ((IX_train)/filter_["std"]).dot(filter_["V"])
+        #IU_test = ((IX_test)/filter_["std"]).dot(filter_["V"])
+        IUs_train.append(IU_train)
+        IUs_test.append(IU_test)
+        IVs.append(filter_["V"])
+        if verbose:
+            IU_check = ((IX_train[filter_["idcs"]]-filter_["mu"])/filter_["std"]).dot(filter_["V"])
+            #IU_check = ((IX_train[filter_["idcs"]])/filter_["std"]).dot(filter_["V"])
+            print "L", filter_["L"]
+            print "std-total", np.std(IU_train, axis=0)**2
+            print "var (should match L from above)", np.std(IU_check, axis=0)**2
+            print "avg", np.average(IU_check, axis=0)
+            raw_input('...')
 
-    assert False
+    # CONCATENATE PROJECTED DESCRIPTORS
+    IU_train = np.concatenate(IUs_train, axis=1)
+    IU_test = np.concatenate(IUs_test, axis=1)
+    IV = np.concatenate(IVs, axis=1)
+    if verbose:
+        print "K-IV", IV.T.dot(IV)
+        print IU_train.shape
+        print IU_test.shape
+        raw_input('___')
+    state["IX_train"] = IU_train
+    state["IX_test"] = IU_test
+    return state
 
-    IU_low = IX_low.dot(V_low)
-    IU_high = IX_high.dot(V_tf)
-    IU_train = state["IX_train"].dot(V_tf)
-    IU_test = state["IX_test"].dot(V_tf)
+def cache_descriptor(state, options, log):
+    log << log.mg << "Caching descriptor" << log.endl
+    log << "Descriptor dimension: %d" % state["IX_train"].shape[1] << log.endl
+    state["IX_train_cached"] = np.copy(state["IX_train"])
+    state["IX_test_cached"] = np.copy(state["IX_test"])
+    return state
 
-    IU2_train = IU_train**2
-    IU2_test = IU_test**2
+def uncache_descriptor(state, options, log):
+    log << log.mg << "Uncaching descriptor" << log.endl
+    log << "Descriptor dimension before uncaching: %d" % state["IX_train"].shape[1] << log.endl
+    state["IX_train"] = np.concatenate(
+        [state["IX_train"], state["IX_train_cached"]], axis=1)
+    state["IX_test"] = np.concatenate(
+        [state["IX_test"], state["IX_test_cached"]], axis=1)
+    log << "Descriptor dimension after uncaching: %d" % state["IX_train"].shape[1] << log.endl
+    return state
 
-    ofs = open('moments.txt', 'w')
-    for i in range(IU_train.shape[0]):
-        ofs.write('%s %+1.7e ' % (
-            "+" if T_train[i] > 0.0 else "-" , T_train[i]))
-        for j in range(IU_train.shape[1]):
-            ofs.write('%+1.7e ' % IU_train[i][j])
-        ofs.write('\n')
-    ofs.close()
+# =====
+# OTHER
+# =====
 
-    print L
-    print np.std(IU_train, axis=0)**2
-    print np.std(IU_low, axis=0)**2
-    raw_input('...')
-
-    print np.average(T_train)
-    print np.std(T_train)
-    print np.average(T_test)
-    print np.std(T_test)
-    print state["t_average"]
-
-    t_moment_1 = IU_train.T.dot(T_train)/T_train.shape[0]
-    t_moment_2 = IU2_train.T.dot(T_train)/T_train.shape[0]
-
-    print "t_moments_1", t_moment_1
-    print "t_moments_2", t_moment_2
-
-    raw_input('MOMO')
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def upconvert_descriptor_matrix(IX, concatenate):
+    D = IX.shape[1]
+    D2 = D*(D+1)/2
+    idcs_upper = np.triu_indices(D)
+    IX_up = np.zeros((IX.shape[0], D+D2), dtype=IX.dtype)
+    IX_up[:,0:D] = IX
+    for i in range(IX.shape[0]):
+        IX_up[i,D:] = np.outer(IX[i], IX[i])[idcs_upper]
+    return IX_up
 
