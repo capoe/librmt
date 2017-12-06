@@ -5,6 +5,7 @@ import csv
 import json
 import math
 import scipy.cluster.hierarchy as sch
+from sklearn.cluster import SpectralClustering
 
 VERBOSE = False
 
@@ -127,7 +128,7 @@ def fps(D, n_select, i0):
     return idcs_selected, np.where(mask == False)[0], distances
 
 def split_mpf_target(IX, Y, levels, 
-        min_interval, mp_mode="mp", mp_options={}, idcs=None, 
+        min_interval, deep_mp=False, mp_options={}, idcs=None, 
         filters=[], this_level=1, split="average", log=None):
     # Split threshold
     if split == "average":
@@ -152,17 +153,16 @@ def split_mpf_target(IX, Y, levels,
         return filters
     IX_0, X_mean_0, X_std_0 = rmt.utils.zscore(IX_0)
     IX_1, X_mean_1, X_std_1 = rmt.utils.zscore(IX_1)
-    if mp_mode == "mp":
+    if deep_mp == False:
         # Lower partition
         L_0, V_0, _X_mean_0, _X_std_0 = mp_transform(IX_0, False, False, log)
         # Upper partition
         L_1, V_1, _X_mean_1, _X_std_1 = mp_transform(IX_1, False, False, log)
-    elif mp_mode == "hmp": 
+    else:
         V_0 = hpcamp(IX_0, mp_options, log=log if VERBOSE else None)
         L_0 = np.array([])
         V_1 = hpcamp(IX_1, mp_options, log=log if VERBOSE else None)
         L_1 = np.array([])
-    else: raise NotImplementedError(mp_mode)
     # NOTE HACK TO CHECK THAT/WHETHER PCs ARE A BETTER CHOICE THAN RANDOM VECTORS
     #V_0 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
     #V_1 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
@@ -175,15 +175,81 @@ def split_mpf_target(IX, Y, levels,
         "V": V_1, "mu": X_mean_1, "std": X_std_1, 
         "y_min": y_split, "y_max": y_max, 
         "partition": 1, "level": this_level })
+
+    if mp_options["append_filter_centres"]:
+        x_moment_2 = mp_options["x_moment_2"] # np.std(IX, axis=0)**2
+        x_moment_4 = mp_options["x_moment_4"] # np.average(IX**4, axis=0)
+        msd_threshold_k = mp_options["msd_threshold_coeff"]
+        filter_centre_msd_0 = X_mean_0.dot(X_mean_0)
+        filter_centre_msd_1 = X_mean_1.dot(X_mean_1)
+        log << "Filter centre msd" << filter_centre_msd_0 << " | " << filter_centre_msd_1 << log.endl
+        def sample_variance(d, N, s2, s4):
+            return np.sum(1./N*s2), np.sum( (s4 - 3*s2*s2)/N**3 + 2*s2*s2/N**2)
+        msd_0, msd_var_0 = sample_variance(
+            IX_0.shape[1], IX_0.shape[0], x_moment_2, x_moment_4)
+        msd_1, msd_var_1 = sample_variance(
+            IX_1.shape[1], IX_1.shape[0], x_moment_2, x_moment_4)
+        # Add as filter if MSD deemed significant
+        filter_centre_msd_threshold_0 = msd_0 + msd_threshold_k*msd_var_0**0.5
+        filter_centre_msd_threshold_1 = msd_1 + msd_threshold_k*msd_var_1**0.5
+        if filter_centre_msd_0 >= filter_centre_msd_threshold_0:
+            filters.append({
+                "idcs": None, "L": None, "n_filters": 1,
+                "V": np.array([X_mean_0]).T, "mu": np.zeros(X_mean_0.shape), "std": np.ones(X_mean_0.shape), "y_min": 0, "y_max": 0, 
+                "partition": 0, "level": this_level })
+        if filter_centre_msd_1 >= filter_centre_msd_threshold_1:
+            filters.append({
+                "idcs": None, "L": None, "n_filters": 1,
+                "V": np.array([X_mean_1]).T, "mu": np.zeros(X_mean_1.shape), "std": np.ones(X_mean_1.shape), "y_min": 0, "y_max": 0, 
+                "partition": 1, "level": this_level })
+
     # Descend into next level(s)
     if this_level < levels:
-        filters = split_mpf_target(IX_0, Y_0, mp_mode=mp_mode, split=split,
+        filters = split_mpf_target(IX_0, Y_0, deep_mp=deep_mp, split=split,
             mp_options=mp_options, levels=levels, min_interval=min_interval, 
             idcs=idcs[idcs_0], filters=filters, this_level=this_level+1, log=log)
-        filters = split_mpf_target(IX_1, Y_1, mp_mode=mp_mode, split=split,
+        filters = split_mpf_target(IX_1, Y_1, deep_mp=deep_mp, split=split,
             mp_options=mp_options, levels=levels, min_interval=min_interval, 
             idcs=idcs[idcs_1], filters=filters, this_level=this_level+1, log=log)
     return filters
+
+def hierarchical_clustering_target(Y, levels, idcs=None, 
+        clusters=[], this_level=1, parent=-1, split="average", log=None):
+    # Split threshold
+    if split == "average":
+        y_split = np.average(Y)
+    elif split == "median":
+        y_split = np.median(Y)
+    else: assert False # 'median' or 'average'
+    y_min = np.min(Y)
+    y_max = np.max(Y)
+    if type(idcs) == type(None):
+        idcs = np.arange(Y.shape[0])
+    idcs_0 = np.where(Y <= y_split)[0]
+    idcs_1 = np.where(Y > y_split)[0]
+    Y_0 = Y[idcs_0]
+    Y_1 = Y[idcs_1]
+    if log:
+        log << "   "*(this_level-1) + "Level %d: split @ %+1.2f  [%4d, %4d]" % (this_level, y_split, Y_0.shape[0], Y_1.shape[0]) << log.endl
+    if Y_0.shape[0] < 2 or Y_1.shape[0] < 2:
+        return clusters
+    cidx_0 = len(clusters)
+    cidx_1 = cidx_0+1
+
+    clusters.append({ 
+        "y_min": y_min, "y_max": y_split,
+        "idx": cidx_0, "nodes": idcs[idcs_0], "len": len(idcs_0), "parent": parent })
+    clusters.append({ 
+        "y_min": y_split, "y_max": y_max,
+        "idx": cidx_1, "nodes": idcs[idcs_1], "len": len(idcs_1), "parent": parent })
+
+    # Descend into next level(s)
+    if this_level < levels:
+        clusters = hierarchical_clustering_target(
+            Y_0, levels=levels, idcs=idcs[idcs_0], clusters=clusters, this_level=this_level+1, log=log, parent=cidx_0)
+        clusters = hierarchical_clustering_target(
+            Y_1, levels=levels, idcs=idcs[idcs_1], clusters=clusters, this_level=this_level+1, log=log, parent=cidx_1)
+    return clusters
 
 # =========
 # FILTERING
@@ -497,16 +563,16 @@ def hpcamp_transform(state, options, log):
     log.prefix = log.prefix[0:-7]
     return state
 
-def hca_mp_transform(state, options, log):
+def bipartite_mp_transform_htree(state, options, log):
     # TODO Handle sparsification
-    min_size_cluster_y = options["hca_mp_transform"]["min_cluster_size"]
-    min_std_cluster_y = options["hca_mp_transform"]["min_cluster_std"] # relative to std-dev of all targets
-    k_c_max_y = options["hca_mp_transform"]["max_cluster_sim"]
+    min_size_cluster_y = options["bipartite_mp_transform_htree"]["min_cluster_size"]
+    min_std_cluster_y = options["bipartite_mp_transform_htree"]["min_cluster_std"] # relative to std-dev of all targets
+    k_c_max_y = options["bipartite_mp_transform_htree"]["max_cluster_sim"]
     # MP method
-    deep_mp = options["hca_mp_transform"]["deep_mp"]
+    deep_mp = options["bipartite_mp_transform_htree"]["deep_mp"]
     # Cluster origins as filters?
-    append_filter_centres = options["hca_mp_transform"]["append_filter_centres"]
-    msd_threshold_k = options["hca_mp_transform"]["msd_threshold_coeff"]
+    append_filter_centres = options["bipartite_mp_transform_htree"]["append_filter_centres"]
+    msd_threshold_k = options["bipartite_mp_transform_htree"]["msd_threshold_coeff"]
 
     verbose = False
     np.set_printoptions(precision=2)
@@ -528,9 +594,6 @@ def hca_mp_transform(state, options, log):
         "do_fps": False,
         "fps_root": "largest_pc", # "largest_cluster"
         "target_dim": 30,
-        # Post-processing
-        "upconvert": True,
-        "concatenate": True
     }
 
     # DESCRIPTOR DISTRIBUTION MOMENTS FOR LATER USE
@@ -669,6 +732,15 @@ def hca_mp_transform(state, options, log):
     std_tf = np.array(std_tf)
     log << "Target-space: filter matrix" << V_tf.shape << log.endl
 
+    # NOTE HACK
+    #s_hs = []
+    #for i in range(len(state["model"].models)):
+    #    s_hs.append(state["model"].models[i].s_h)
+    #V_tf = np.array(s_hs)
+    #mu_tf = np.zeros(V_tf.shape)
+    #std_tf = np.ones(V_tf.shape)
+    #raw_input('...')
+
     # SHIFT, SCALE AND PROJECT
     IX_train_out = []
     IX_test_out = []
@@ -746,12 +818,12 @@ def legendre_transform(state, options, log):
     state["IX_test"] = IX_test_out
     return state
 
-def binary_y_tree_mp_transform(state, options, log):
+def bipartite_mp_transform_btree(state, options, log):
     log << log.mg << "Binary y-tree MP transform" << log.endl
-    n_levels = options["binary_y_tree_mp_transform"]["n_levels"]
-    std_scale = options["binary_y_tree_mp_transform"]["min_interval"]
-    mp_mode = options["binary_y_tree_mp_transform"]["mp_mode"]
-    split = options["binary_y_tree_mp_transform"]["split"]
+    n_levels = options["bipartite_mp_transform_btree"]["n_levels"]
+    std_scale = options["bipartite_mp_transform_btree"]["min_interval"]
+    deep_mp = options["bipartite_mp_transform_btree"]["deep_mp"]
+    split = options["bipartite_mp_transform_btree"]["split"]
     verbose = False
     T_train = state["T_train"]
     T_test = state["T_test"]
@@ -759,11 +831,11 @@ def binary_y_tree_mp_transform(state, options, log):
     IX_test = state["IX_test"]
     
     # CALCULATE OPTIONS FOR TREE-BASED MPF
-    if mp_mode == "hmp":
+    if deep_mp:
         min_clust_size = int(0.1*IX_train.shape[1]+0.5)
         if min_clust_size < 2:
             min_clust_size = 2
-        log << "MP mode '%s':" % mp_mode << "setting min_cluster_size=%d" % (min_clust_size) << log.endl
+        log << "MP mode '%s':" % ("deep" if deep_mp else "standard") << "setting min_cluster_size=%d" % (min_clust_size) << log.endl
         mp_options = { 
           "hpcamp_transform": {
             # Clustering
@@ -771,7 +843,7 @@ def binary_y_tree_mp_transform(state, options, log):
             "cluster_similarity_threshold": 0.9,
             # Sequencing
             "sparsify": "sequence", # "sequence" or "fps"
-            "filter_seq_sim_cutoff": 0.9, # 0.71,
+            "filter_seq_sim_cutoff": 0.71, # 0.71,
             "sequence_select": [0], # [0] or [ 0, -1 ]
             # FPS
             "do_fps": False,
@@ -780,14 +852,229 @@ def binary_y_tree_mp_transform(state, options, log):
     else:
         mp_options = {}
 
+    mp_options["x_moment_2"] = np.std(IX_train, axis=0)**2
+    mp_options["x_moment_4"] = np.average(IX_train**4, axis=0)
+    mp_options["append_filter_centres"] = options["bipartite_mp_transform_btree"]["append_filter_centres"]
+    mp_options["msd_threshold_coeff"] = options["bipartite_mp_transform_btree"]["msd_threshold_coeff"]
+
     # RECURSIVELY (=HIERARCHICALLY) APPLY MP FILTERING TO DATASET
     filters = split_mpf_target(IX_train, T_train, 
         min_interval=std_scale*np.std(T_train), 
         split=split,
         levels=n_levels, 
-        mp_mode=mp_mode,
+        deep_mp=deep_mp,
         mp_options=mp_options,
         log=log)
+
+    # NOTE HACK
+    #filters = []
+    #for i in range(len(state["model"].models)):
+    #    s_h = state["model"].models[i].s_h
+    #    filters.append({ "mu": np.zeros(s_h.shape), "std": np.ones(s_h.shape), "V": np.array([s_h]).T, "level": 0, "partition": 0, "n_filters": 1, "y_min": 0, "y_max": 0 })
+    #filters = []
+    #J = None
+    #for i in range(len(state["model"].models)):
+    #    s_h = state["model"].models[i].s_h
+    #    if type(J) == type(None):
+    #        J = np.outer(s_h, s_h)
+    #    else:
+    #        J  = J + np.outer(s_h, s_h)
+    #import numpy.linalg as la
+    #w, V = la.eig(J)
+    #print w
+    ##V = rmt.utils.generate_orthonormal_vectors(V.shape[1], V.shape[0]).T
+    #for i in range(V.shape[1]):
+    #    s_h = V[:,i].real
+    #    filters.append({ "mu": np.zeros(s_h.shape), "std": np.ones(s_h.shape), "V": np.array([s_h]).T, "level": 0, "partition": 0, "n_filters": 1, "y_min": 0, "y_max": 0 })
+    #raw_input('...')
+
+    IUs_train = []
+    IUs_test = []
+    IVs = []
+    for filter_ in filters:
+        # TODO Add filter centres "mu" as filters?
+        log << "level:partition {level:02d}:{partition:02d}   # filters {n_filters:2d}   y-bounds [{y_min:+1.2f}, {y_max:+1.2f}]".format(**filter_) << log.endl
+        if filter_["n_filters"] == 0: continue
+        IU_train = rmt.utils.div0(IX_train-filter_["mu"], filter_["std"]).dot(filter_["V"])
+        IU_test = rmt.utils.div0(IX_test-filter_["mu"], filter_["std"]).dot(filter_["V"])
+        #IU_train = ((IX_train)/filter_["std"]).dot(filter_["V"])
+        #IU_test = ((IX_test)/filter_["std"]).dot(filter_["V"])
+        IUs_train.append(IU_train)
+        IUs_test.append(IU_test)
+        IVs.append(filter_["V"])
+        if verbose:
+            IU_check = ((IX_train[filter_["idcs"]]-filter_["mu"])/filter_["std"]).dot(filter_["V"])
+            #IU_check = ((IX_train[filter_["idcs"]])/filter_["std"]).dot(filter_["V"])
+            print "L", filter_["L"]
+            print "std-total", np.std(IU_train, axis=0)**2
+            print "var (should match L from above)", np.std(IU_check, axis=0)**2
+            print "avg", np.average(IU_check, axis=0)
+            raw_input('...')
+
+    # CONCATENATE PROJECTED DESCRIPTORS
+    IU_train = np.concatenate(IUs_train, axis=1)
+    IU_test = np.concatenate(IUs_test, axis=1)
+    IV = np.concatenate(IVs, axis=1)
+    if verbose:
+        print "K-IV", IV.T.dot(IV)
+        print IU_train.shape
+        print IU_test.shape
+        raw_input('___')
+    state["IX_train"] = IU_train
+    state["IX_test"] = IU_test
+    return state
+
+def mpf_kernel(state, options, log):
+    # OPTIONS
+    normalise = True
+    xi = 2 # NOTE xi = 2 works better?
+    verbose = False
+    # KERNEL ON MP FILTERS
+    IX_train = state["IX_train"]
+    IX_test = state["IX_test"]
+    K_train = IX_train.dot(IX_train.T)
+    K_cross = IX_test.dot(IX_train.T)
+    K_test = IX_test.dot(IX_test.T)
+    if normalise:
+        norm_train = K_train.diagonal()
+        norm_test = K_test.diagonal()
+        K_train = K_train/(np.outer(norm_train, norm_train)**0.5)
+        K_test = K_test/(np.outer(norm_test, norm_test)**0.5)
+        K_cross = K_cross/(np.outer(norm_test, norm_train)**0.5)
+        if verbose:
+            print "norm", norm_train
+            print norm_test
+    if verbose:
+        print "K_train", K_train
+        print "K_test", K_test
+        print "K_cross", K_cross
+        raw_input('...')
+    K_train = (0.5*(1.+K_train))**xi
+    K_cross = (0.5*(1.+K_cross))**xi
+    # KERNEL ON CACHED DESCRIPTOR
+    K2_train, K2_cross = rmt.kernel_dot_tf(
+        state["IX_train_cached"], 
+        state["IX_test_cached"], 
+        { "tf": lambda K: (0.5*(1.+K))**2 })
+    if verbose:
+        print "K2_train", K2_train
+        print "K2_cross", K2_cross
+        raw_input('...')
+    # COMBINE KERNELS
+    w1 = 0.5
+    w2 = 0.5
+    state["has_K"] = True
+    state["K_train"] = w1*K_train+w2*K2_train
+    state["K_test"]  = w1*K_cross+w2*K2_cross
+    return state
+
+def bipartite_mp_transform_simtree(state, options, log):
+    log << log.mg << "Bipartite sim-tree MP transform" << log.endl
+    n_levels = options["bipartite_mp_transform_simtree"]["n_levels"]
+    std_scale = options["bipartite_mp_transform_simtree"]["min_interval"]
+    deep_mp = options["bipartite_mp_transform_simtree"]["deep_mp"]
+    split = options["bipartite_mp_transform_simtree"]["split"]
+    verbose = False
+
+    T_train = state["T_train"]
+    T_test = state["T_test"]
+    IX_train = state["IX_train"]
+    IX_test = state["IX_test"]
+    x_moment_2 = np.std(IX_train, axis=0)**2
+    x_moment_4 = np.average(IX_train**4, axis=0)
+
+    # Kernel (similarity) matrix
+    K_sim = IX_train.dot(IX_train.T)**2.0 # NOTE option
+    K_sim = K_sim/np.outer(K_sim.diagonal(), K_sim.diagonal())**0.5
+    D_sim = (1. - K_sim + 1e-10)**0.5
+
+    K_sim = 0.5*(K_sim+K_sim.T)
+    D_sim = 0.5*(D_sim+D_sim.T)
+
+    # SPECTRAL CLUSTERING (TARGET-BASED)
+    clusters = hierarchical_clustering_target(
+        Y=T_train, 
+        levels=n_levels, 
+        split=split, 
+        log=log)
+
+    #s_hs = []
+    #for i in range(len(state["model"].models)):
+    #    s_hs.append(state["model"].models[i].s_h)
+    #V_tf = np.array(s_hs)
+    #mu_tf = np.zeros(V_tf.shape)
+    #std_tf = np.ones(V_tf.shape)
+    #print T_train[0]
+    #x = IX_train[0]
+    #print (-0.5*V_tf.dot(x)**2/x.shape[0])
+
+    # EXTRACT FILTERS
+    filters = []
+    for cluster in clusters:
+        #emat = -0.5*IX_train[cluster["nodes"]].dot(V_tf.T)**2/IX_train.shape[1]
+        #print T_train[cluster["nodes"]]
+        #print np.sum(emat, axis=1)
+        #print np.sum(emat, axis=0)
+
+        # Similarity matrix for this cluster
+        D_cluster = D_sim[cluster["nodes"]][:,cluster["nodes"]]
+        K_cluster = K_sim[cluster["nodes"]][:,cluster["nodes"]]
+        print "Cluster", cluster["idx"], "of size", cluster["len"]
+
+        # Subclustering
+        n_clusters = 10
+        if cluster["len"] < 5*n_clusters: continue
+        clf = SpectralClustering(n_clusters=n_clusters, affinity='precomputed')
+        labels = clf.fit_predict(K_cluster)
+        
+        # Extract filters from sub-clusters
+        for i in range(n_clusters):
+            idcs = cluster["nodes"][np.where(labels == i)[0]]
+            print "Subcluster", i, "of size", len(idcs)
+            if len(idcs) < 2: continue
+
+            IX_i = IX_train[idcs]
+            IX_i, X_mean_i, X_std_i = rmt.utils.zscore(IX_i)
+            L_i, V_i, _X_mean_i, _X_std_i = mp_transform(IX_i, False, False, log=None)
+
+            filters.append({
+                "idcs": idcs, "L": L_i, "n_filters": V_i.shape[1],
+                "V": V_i, "mu": X_mean_i, "std": X_std_i, "y_min": cluster["y_min"], "y_max": cluster["y_max"],
+                "partition": i, "level": cluster["idx"]
+            })
+            if True: # NOTE Option
+                msd_threshold_k = 3 # NOTE Option
+                filter_centre_msd_i = X_mean_i.dot(X_mean_i)
+                def sample_variance(d, N, s2, s4):
+                    return np.sum(1./N*s2), np.sum( (s4 - 3*s2*s2)/N**3 + 2*s2*s2/N**2)
+                msd_i, msd_var_i = sample_variance(
+                    IX_i.shape[1], IX_i.shape[0], x_moment_2, x_moment_4)
+                # Add as filter if MSD deemed significant
+                filter_centre_msd_threshold_i = msd_i + msd_threshold_k*msd_var_i**0.5
+                if filter_centre_msd_i >= filter_centre_msd_threshold_i:
+                    filters.append({
+                        "idcs": None, "L": None, "n_filters": 1,
+                        "V": np.array([X_mean_i]).T, "mu": np.zeros(X_mean_i.shape), "std": np.ones(X_mean_i.shape), "y_min": 0, "y_max": 0, 
+                        "partition": i, "level": cluster["idx"] })
+
+            #emat = -0.5*IX_train[idcs].dot(V_tf.T)**2/IX_train.shape[1]
+            #print len(idcs), np.average(emat, axis=0)
+
+        #kclusters = hierarchical_clustering(D_cluster, method='single')
+        #for clust in kclusters:
+        #    idcs = cluster["nodes"][clust["nodes"]]
+        #    emat = -0.5*IX_train[idcs].dot(V_tf.T)**2/IX_train.shape[1]
+        #    print clust["len"], np.sum(emat, axis=0)
+        #    #print clust["len"]
+        #    raw_input('___')
+
+    # NOTE HACK
+    #filters = []
+    #for i in range(len(state["model"].models)):
+    #    s_h = state["model"].models[i].s_h
+    #    filters.append({ "mu": np.zeros(s_h.shape), "std": np.ones(s_h.shape), "V": np.array([s_h]).T, "level": 0, "partition": 0, "n_filters": 1, "y_min": 0, "y_max": 0 })
+    #raw_input('...')
+
     IUs_train = []
     IUs_test = []
     IVs = []

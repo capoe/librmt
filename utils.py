@@ -2,6 +2,7 @@ import numpy as np
 import copy
 
 def generate_orthonormal_vectors(N, d, seed=None): # number of vecs N, dimension d
+    # Returns matrix, rows correspond to orthonormal vectors
     assert N <= d
     if seed != None:
         np.random.seed(seed)

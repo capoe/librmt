@@ -24,7 +24,7 @@ def evaluate(
     options_meta = {
         "n_reps": 10,
         "seed_base": 791623,
-        "opt_hyper": False,
+        "opt_hyper": True,
         "filelog": False,
         "filelog_name": "run-models-log.json",
         "fileout_name": "run-models-out.json",
@@ -92,35 +92,55 @@ def evaluate(
             log << log.endl
             log << log.my << record_tag << log.endl
             log << log.endl
+            hyper_is_optimized = False
+            model_hyper = ""
             # CROSS-VALIDATE
             for i in range(i0_rep, options_meta["n_reps"]):
+                log << log.endl << "Repetition %d" % (i+1) << log.endl << log.endl
                 # UPDATE OPTIONS FOR THIS REPETITION
                 options = update_options(options, options_meta, i)
                 # Optimise hyperparameters
-                if options_meta["opt_hyper"] and i == 0 and model == "hpcamp-rr":
-                    log << "Start subspace dimension optimisation" << log.endl
-                    options["split_test_train"]["seed"] = seed_base - 1
-                    rmses_hyper = []
-                    take_hyper = [ 2, 3, 5, 10, 15, 20, 25, 30 ]
-                    for take in take_hyper:
-                        options["hpcamp_transform"]["target_dim"] = take
-                        options["split_test_train"]["seed"] = seed_base + i
-                        log.silent = True
-                        state_clone = load_state(options_state)
-                        out = model_dict[model].apply(state_clone, options, log)
-                        log.silent = False
-                        rmses_hyper.append(out["out"]["rmse_test"])
-                        log << "Take %d : RMSE_test %1.4f" % (take, out["out"]["rmse_test"]) << log.endl
-                    idx_take = np.argmin(rmses_hyper)
-                    log << "RMSE min" << rmses_hyper[idx_take] << "@" << take_hyper[idx_take] << log.endl
-                    options["hpcamp_transform"]["target_dim"] = take_hyper[idx_take]
-                    model_hyper = "subspace_size=%d" % take_hyper[idx_take]
+                if options_meta["opt_hyper"] and model_dict[model].hyper != None and hyper_is_optimized == False:
+                    hyper = model_dict[model].hyper
+                    options_hyper_set = rmt.utils.dict_compile(
+                        options, 
+                        hyper["sweeps"], 
+                        "combinatorial")
+                    state_clone = load_state(options_state)
+                    target_out = []
+                    monitor_out = []
+                    tags_out = []
+                    results_out = []
+                    if hyper["break_at"]:
+                        out = model_dict[model].apply(state_clone, options, log, stop_at=hyper["break_at"])
+                        for options_hyper in options_hyper_set:
+                            out = model_dict[model].apply(state_clone, options_hyper, log, start_at=hyper["break_at"], prefix=False)
+                            target = hyper["target"](out)
+                            target_out.append(target[1])
+                            monitor = hyper["monitor"](out)
+                            monitor_out.append(monitor[1])
+                            opt_hyper_tag = ""
+                            for s in hyper["sweeps"]:
+                                v = rmt.utils.dict_lookup_path(options_hyper, s[0])
+                                v = v if type(v) not in [float, int] else "%+1.4e" % v
+                                opt_hyper_tag += "{}={} ".format(s[0], v)
+                            tags_out.append(opt_hyper_tag)
+                            results_out.append(out)
+                            log << "[hyper] {} {} {:+1.7e}   {} {:+1.7e}".format(opt_hyper_tag, monitor[0], monitor[1], target[0], target[1]) << log.endl
+                    else:
+                        raise NotImplementedError()
+                    idx = np.argmin(target_out)
+                    options = options_hyper_set[idx]
+                    log << "[hyper] Optimum @ parameters: {} target: {}".format(tags_out[idx], target_out[idx]) << log.endl
+                    model_hyper = tags_out[idx]
+                    out = results_out[idx]
+                    hyper_is_optimized = True
                 else:
-                    model_hyper = ""
-                # Load state
-                state_clone = load_state(options_state)
-                # Apply model
-                out = model_dict[model].apply(state_clone, options, log)
+                    log << "[hyper] Using parameter set from hyper-optimization:" << model_hyper << log.endl
+                    # Load state
+                    state_clone = load_state(options_state)
+                    # Apply model
+                    out = model_dict[model].apply(state_clone, options, log)
                 t_test_pred = out["out"]["T_test_pred"]
                 t_test = out["out"]["T_test"]
                 np.savetxt('out-test-%s.txt' % model, np.array([t_test_pred, t_test]).T)
@@ -131,6 +151,7 @@ def evaluate(
                 }
                 for field in options_meta["store"]: 
                     record[field] = out["out"][field]
+                    log << "%20s = %-20s" % (field, repr(record[field])) << log.endl
                 records.append(record)
                 if options_meta["filelog"] and len(records) % 10 == 0:
                     json.dump(records, open(options_meta["filelog_name"], "w"), indent=1)
@@ -139,7 +160,7 @@ def evaluate(
         json.dump(records, open(options_meta["filelog_name"], "w"), indent=1)
         json.dump(records, open(options_meta["fileout_name"], "w"), indent=1)
 
-    return
+    return records
 
 def parse_records(
         records,

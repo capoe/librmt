@@ -1440,6 +1440,12 @@ def kernel_dot(IX_train, IX_test, options):
     IX_test_norm = IX_test / norm_test
     return IX_train_norm.dot(IX_train_norm.T)**xi, IX_test_norm.dot(IX_train_norm.T)**xi
 
+def kernel_dot_tf(IX_train, IX_test, options):
+    K_train, K_cross = kernel_dot(IX_train, IX_test, { "xi": 1 })
+    K_train = options["tf"](K_train)
+    K_cross = options["tf"](K_cross)
+    return K_train, K_cross
+
 def shift_kernel(state, options, log):
     state["K_train"] = 0.5*(1. + state["K_train"])
     state["K_test"] = 0.5*(1. + state["K_test"])
@@ -1465,7 +1471,8 @@ def compute_kernel_train_test(state, options, log):
     return state
 
 kernel_method_factory = {
-    'dot': kernel_dot
+    'dot': kernel_dot,
+    'dot-tf': kernel_dot_tf
 }
 
 if __name__ == "__main__":
