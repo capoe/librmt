@@ -16,6 +16,7 @@ import nonlinear as nonlinear
 import labs as labs
 import utils as utils
 import launch as launch
+import hamiltonian as hamiltonian
 from state import State
 from pipe import Pipe
 # External libraries
@@ -965,8 +966,8 @@ def learn(state, options, log, verbose=False):
     rmse_test = (np.sum((T_test_pred-T_test)**2)/n_test)**0.5
     mae_train = np.sum(np.abs(T_train_pred-T_train))/n_train
     mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
-    np.savetxt('out.learn_train.txt', np.array([T_train, T_train_pred]).T)
-    np.savetxt('out.learn_test.txt', np.array([T_test, T_test_pred]).T)
+    #np.savetxt('out.learn_train.txt', np.array([T_train, T_train_pred]).T)
+    #np.savetxt('out.learn_test.txt', np.array([T_test, T_test_pred]).T)
     # RETURN RESULTS OBJECT
     res = {
         't_train_avg': state["t_average"] if "t_average" in state else 0.0,
