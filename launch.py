@@ -16,6 +16,7 @@ def evaluate(
     load_state,     # Function f(arg: options_state) called to create state
     build_models,   # Function f(arg: options_build) called to create models
     log,            # Logger
+    silent = False,
     check_options = (lambda opt: True),     # Function f(arg: options_models) used to check option validity
     update_options = (lambda opt, i: opt)): # function f(arg: options_models, arg: options_meta, i_rep) called to update options for repetition i_rep
 
@@ -112,7 +113,9 @@ def evaluate(
                     tags_out = []
                     results_out = []
                     if hyper["break_at"]:
+                        if silent: log.silent = True
                         out = model_dict[model].apply(state_clone, options, log, stop_at=hyper["break_at"])
+                        log.silent = False
                         for options_hyper in options_hyper_set:
                             out = model_dict[model].apply(state_clone, options_hyper, log, start_at=hyper["break_at"], prefix=False)
                             target = hyper["target"](out)
@@ -140,10 +143,12 @@ def evaluate(
                     # Load state
                     state_clone = load_state(options_state)
                     # Apply model
+                    if silent: log.silent = True
                     out = model_dict[model].apply(state_clone, options, log)
-                t_test_pred = out["out"]["T_test_pred"]
-                t_test = out["out"]["T_test"]
-                np.savetxt('out-test-%s.txt' % model, np.array([t_test_pred, t_test]).T)
+                    log.silent = False
+                #t_test_pred = out["out"]["T_test_pred"]
+                #t_test = out["out"]["T_test"]
+                #np.savetxt('out-test-%s.txt' % model, np.array([t_test_pred, t_test]).T)
                 record = {
                     "tag": record_tag,
                     "model": model,
