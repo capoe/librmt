@@ -9,6 +9,8 @@ from sklearn.cluster import SpectralClustering
 
 VERBOSE = False
 
+# TODO mpf_kernel: communicate kernel transform through options (mpf + cached descriptor)
+
 # =======================
 # HIERARCHICAL CLUSTERING
 # =======================
@@ -811,7 +813,8 @@ def legendre_transform(state, options, log):
     log << "Input dimension before legendre transform: d =" << d << log.endl 
     log << "Output dimension after legendre transform: d'=" << IX_train_out.shape[1] << log.endl
     std = np.std(IX_train_out, axis=0)
-    log << "Standard deviation along components: min=%+1.2e avg=%+1.2e max=%+1.2e" % (np.min(std), np.average(std), np.max(std)) << log.endl
+    if len(std) > 0:
+        log << "Standard deviation along components: min=%+1.2e avg=%+1.2e max=%+1.2e" % (np.min(std), np.average(std), np.max(std)) << log.endl
     if VERBOSE:
         log << "Standard deviation along components" << std << log.endl
     state["IX_train"] = IX_train_out
@@ -912,22 +915,32 @@ def bipartite_mp_transform_btree(state, options, log):
             raw_input('...')
 
     # CONCATENATE PROJECTED DESCRIPTORS
-    IU_train = np.concatenate(IUs_train, axis=1)
-    IU_test = np.concatenate(IUs_test, axis=1)
-    IV = np.concatenate(IVs, axis=1)
-    if verbose:
-        print "K-IV", IV.T.dot(IV)
-        print IU_train.shape
-        print IU_test.shape
-        raw_input('___')
-    state["IX_train"] = IU_train
-    state["IX_test"] = IU_test
+    if len(IUs_train) > 0:
+        IU_train = np.concatenate(IUs_train, axis=1)
+        IU_test = np.concatenate(IUs_test, axis=1)
+        IV = np.concatenate(IVs, axis=1)
+        if verbose:
+            print "K-IV", IV.T.dot(IV)
+            print IU_train.shape
+            print IU_test.shape
+            raw_input('___')
+        state["IX_train"] = IU_train
+        state["IX_test"] = IU_test
+    else:
+        print "WARNING No filters returned"
+        state["IX_train"] = np.zeros((IX_train.shape[0],0))
+        state["IX_test"] = np.zeros((IX_test.shape[0],0))
     return state
 
 def mpf_kernel(state, options, log):
+    ftag = "mpf_kernel"
     # OPTIONS
-    normalise = True
-    xi = 2 # NOTE xi = 2 works better?
+    normalise = options[ftag]["normalise"]
+    tf1 = options[ftag]["tf1"]
+    tf2 = options[ftag]["tf2"]
+    w1 = options[ftag]["w1"]
+    w2 = options[ftag]["w2"]
+    #xi = 2 # NOTE xi = 2 works better?
     verbose = False
     # KERNEL ON MP FILTERS
     IX_train = state["IX_train"]
@@ -949,20 +962,22 @@ def mpf_kernel(state, options, log):
         print "K_test", K_test
         print "K_cross", K_cross
         raw_input('...')
-    K_train = (0.5*(1.+K_train))**xi
-    K_cross = (0.5*(1.+K_cross))**xi
+    #K_train = (0.5*(1.+K_train))**xi # NOTE
+    #K_cross = (0.5*(1.+K_cross))**xi # NOTE
+    K_train = tf1(K_train)
+    K_cross = tf1(K_cross)
     # KERNEL ON CACHED DESCRIPTOR
     K2_train, K2_cross = rmt.kernel_dot_tf(
         state["IX_train_cached"], 
         state["IX_test_cached"], 
-        { "tf": lambda K: (0.5*(1.+K))**2 })
+        { "tf": tf2 })
     if verbose:
         print "K2_train", K2_train
         print "K2_cross", K2_cross
         raw_input('...')
     # COMBINE KERNELS
-    w1 = 0.5
-    w2 = 0.5
+    #w1 = 0.5
+    #w2 = 0.5
     state["has_K"] = True
     state["K_train"] = w1*K_train+w2*K2_train
     state["K_test"]  = w1*K_cross+w2*K2_cross

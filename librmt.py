@@ -770,22 +770,25 @@ def normalise_descriptor_zscore(state, options, log):
     if "normalise_descriptor_zscore" in options:
         options = options["normalise_descriptor_zscore"]
     if options["zscore"]:
-        log << log.mg << "Z-scoring descriptor" << log.endl
         IX_train = state["IX_train"]
         IX_test = state["IX_test"]
-        # Normalise
-        X_mean = np.mean(IX_train, axis=0)
-        X_std = np.std(IX_train, axis=0, ddof=1)
-        log << "Mean min max:" << np.min(X_mean) << np.max(X_mean) << log.endl
-        log << "Std  min max:" << np.min(X_std) << np.max(X_std) << log.endl
-        IX_train_norm = utils.div0(IX_train - X_mean, X_std)
-        IX_test_norm = utils.div0(IX_test - X_mean, X_std)
-        # Store
-        state.register("clean_descriptor_zscore", options)
-        state["IX_train"] = IX_train_norm
-        state["IX_test"] = IX_test_norm
-        state["X_mean"] = X_mean
-        state["X_std"] = X_std
+        if IX_train.shape[1] > 0:
+            log << log.mg << "Z-scoring descriptor" << log.endl
+            # Normalise
+            X_mean = np.mean(IX_train, axis=0)
+            X_std = np.std(IX_train, axis=0, ddof=1)
+            log << "Mean min max:" << np.min(X_mean) << np.max(X_mean) << log.endl
+            log << "Std  min max:" << np.min(X_std) << np.max(X_std) << log.endl
+            IX_train_norm = utils.div0(IX_train - X_mean, X_std)
+            IX_test_norm = utils.div0(IX_test - X_mean, X_std)
+            # Store
+            state.register("clean_descriptor_zscore", options)
+            state["IX_train"] = IX_train_norm
+            state["IX_test"] = IX_test_norm
+            state["X_mean"] = X_mean
+            state["X_std"] = X_std
+        else:
+            print "WARNING Cannot z-score 0-dimensional descriptor"
     log.prefix = log.prefix[:-7]
     return state
 
