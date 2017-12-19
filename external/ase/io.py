@@ -22,10 +22,69 @@ class ConfigASE(object):
     def get_chemical_symbols(self):
         return self.symbols
     def create(self, n_atoms, fs):
-        header = fs.readline().split()
+        #header = fs.readline().split()
+        # Parse header: key1="str1" key2=123 key3="another value" ...
+        header = fs.readline().replace("\n", "")
+        tokens = []
+        pos0 = 0
+        pos1 = 0
+        status = "<"
+        quotcount = 0
+        while pos1 < len(header):
+            #print tokens, quotcount, status, pos0, pos1, header[pos0:pos1]
+            status_out = status
+            if status == "<":
+                if header[pos1] == "=":
+                    tokens.append(header[pos0:pos1])
+                    pos0 = pos1+1
+                    pos1 = pos1+1
+                    status_out = ">"
+                    quotcount = 0
+                else:
+                    pos1 += 1
+            elif status == ">":
+                if header[pos1-1:pos1] == '"':
+                    quotcount += 1
+                if quotcount == 0 and header[pos1] == ' ':
+                    quotcount = 2
+                if quotcount <= 1:
+                    pos1 += 1
+                elif quotcount == 2:
+                    tokens.append(header[pos0:pos1])
+                    pos0 = pos1+1
+                    pos1 = pos1+1
+                    status_out = ""
+                    quotcount = 0
+                else:
+                    assert False
+            elif status == "":
+                if header[pos1] == ' ':
+                    pos0 += 1
+                    pos1 += 1
+                else:
+                    status_out = "<"
+            else:
+                assert False
+            status = status_out
+        """
+        sp = header.split('=')
+        items = []
+        for s in sp:
+            assert not s.startswith('" ')
+            if '"' in s:
+                ss = s.split('" ')
+                ss[0] = ss[0].replace('"', '')
+            else:
+                assert s.count(' ') <= 1
+                ss = s.split()
+            items.extend(ss)
+        """
+        items = tokens
+        kvs = []
+        for i in range(len(items)/2):
+            kvs.append([items[2*i], items[2*i+1]])
         # Read key-value pairs
-        for key_value in header:
-            kv = key_value.split('=')
+        for kv in kvs:
             key = kv[0]
             value = '='.join(kv[1:])
             value = value.replace('"','').replace('\'','')
