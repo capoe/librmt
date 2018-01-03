@@ -1272,7 +1272,11 @@ def kernel_svm_binary(state, options, log):
         class_weight = options["class-weight"]
     else:
         class_weight = None
-    mode = options["kernel_svm"]["mode"]
+    if "C" in options["kernel_svm"]:
+        C = options["kernel_svm"]["C"]
+    else:
+        C = 1.
+    #mode = options["kernel_svm"]["mode"]
     # Create target reference for multi-class threshold scoring
     # E.g., class idx = 2 => y = [ -1, -1, +1 ]
     n_classes = len(set(list(L_train)))
@@ -1281,11 +1285,11 @@ def kernel_svm_binary(state, options, log):
     from sklearn import svm # TODO Set SVC options
     if class_weight == None:
         class_weight = 'balanced'
-        log << "Using class weights" << class_weight << log.endl
+        #log << "Using class weights" << class_weight << log.endl
     clf = svm.SVC(
         kernel='precomputed',
         class_weight=class_weight,#'balanced', # TODO This can make a large difference!
-        C=1)
+        C=C)
     clf.fit(K_train**xi, L_train)
     if K_test.shape[0] > 0:
         # Predict
@@ -1304,11 +1308,13 @@ def kernel_svm_binary(state, options, log):
         y_score = np.array([])
         auc_out = -1.0
         mcc_out = -1.0
-    print "AUC", auc_out, mcc_out
+    #print "AUC", auc_out, mcc_out
     res = {
         'clf': clf,
         'auc': auc_out,
         'mcc': mcc_out,
+        'n_train': L_train.shape[0],
+        'n_test': L_test.shape[0],
         'n_classes': n_classes,
         'L_test_score': y_score,
         'L_test': y_true,
@@ -1415,6 +1421,8 @@ def kernel_rr(state, options, log):
     # Evaluate
     rmse_train = rms_error(y_train, T_train)
     rmse_test = rms_error(y_test, T_test)
+    mae_train = np.sum(np.abs(y_train-T_train))/y_train.shape[0]
+    mae_test = np.sum(np.abs(y_test-T_test))/y_test.shape[0]
     # Store
     out_train = np.array([y_train, T_train]).T
     out_test = np.array([y_test, T_test]).T
@@ -1426,6 +1434,8 @@ def kernel_rr(state, options, log):
         'T_test': np.copy(state["T_test"]),
         'rmse_train': rmse_train,
         'rmse_test': rmse_test,
+        'mae_train': mae_train,
+        'mae_test': mae_test,
         'std_data_train': np.std(state["T_train"]),
         'std_data_test': np.std(state["T_test"]),
         'n_train': y_train.shape[0],
@@ -1435,17 +1445,22 @@ def kernel_rr(state, options, log):
 
 def kernel_dot(IX_train, IX_test, options):
     xi = options["xi"]
+    normalise = options["normalise"]
     n_dim = IX_train.shape[1]
-    norm_train = np.sum(IX_train*IX_train, axis=1)**0.5
-    norm_train = np.tile(norm_train, (n_dim,1)).T
-    IX_train_norm = IX_train / norm_train
-    norm_test = np.sum(IX_test*IX_test, axis=1)**0.5
-    norm_test = np.tile(norm_test, (n_dim,1)).T
-    IX_test_norm = IX_test / norm_test
+    if normalise:
+        norm_train = np.sum(IX_train*IX_train, axis=1)**0.5
+        norm_train = np.tile(norm_train, (n_dim,1)).T
+        norm_test = np.sum(IX_test*IX_test, axis=1)**0.5
+        norm_test = np.tile(norm_test, (n_dim,1)).T
+        IX_train_norm = IX_train / norm_train
+        IX_test_norm = IX_test / norm_test
+    else:
+        IX_train_norm = IX_train
+        IX_test_norm = IX_test
     return IX_train_norm.dot(IX_train_norm.T)**xi, IX_test_norm.dot(IX_train_norm.T)**xi
 
 def kernel_dot_tf(IX_train, IX_test, options):
-    K_train, K_cross = kernel_dot(IX_train, IX_test, { "xi": 1 })
+    K_train, K_cross = kernel_dot(IX_train, IX_test, { "xi": 1, "normalise": options["normalise"] })
     K_train = options["tf"](K_train)
     K_cross = options["tf"](K_cross)
     return K_train, K_cross

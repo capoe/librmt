@@ -6,6 +6,7 @@ class Pipe(object):
         self.sequence = []
         self.tags = []
         self.hyper = None
+        self.options_specialization = None
         return
     def push(self, fct, tag=""):
         self.sequence.append(fct)

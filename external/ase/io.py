@@ -33,6 +33,7 @@ class ConfigASE(object):
         while pos1 < len(header):
             #print tokens, quotcount, status, pos0, pos1, header[pos0:pos1]
             status_out = status
+            # On the lhs of the key-value pair?
             if status == "<":
                 if header[pos1] == "=":
                     tokens.append(header[pos0:pos1])
@@ -42,6 +43,7 @@ class ConfigASE(object):
                     quotcount = 0
                 else:
                     pos1 += 1
+            # On the rhs of the key-value pair?
             elif status == ">":
                 if header[pos1-1:pos1] == '"':
                     quotcount += 1
@@ -57,6 +59,7 @@ class ConfigASE(object):
                     quotcount = 0
                 else:
                     assert False
+            # In between key-value pairs?
             elif status == "":
                 if header[pos1] == ' ':
                     pos0 += 1
@@ -66,24 +69,10 @@ class ConfigASE(object):
             else:
                 assert False
             status = status_out
-        """
-        sp = header.split('=')
-        items = []
-        for s in sp:
-            assert not s.startswith('" ')
-            if '"' in s:
-                ss = s.split('" ')
-                ss[0] = ss[0].replace('"', '')
-            else:
-                assert s.count(' ') <= 1
-                ss = s.split()
-            items.extend(ss)
-        """
-        items = tokens
         kvs = []
-        for i in range(len(items)/2):
-            kvs.append([items[2*i], items[2*i+1]])
-        # Read key-value pairs
+        for i in range(len(tokens)/2):
+            kvs.append([tokens[2*i], tokens[2*i+1]])
+        # Process key-value pairs
         for kv in kvs:
             key = kv[0]
             value = '='.join(kv[1:])
@@ -106,6 +95,7 @@ class ConfigASE(object):
             new_atom = self.create_atom(fs.readline())
             self.positions.append(new_atom.pos)
             self.symbols.append(new_atom.name)
+        self.positions = np.array(self.positions)
         return
     def create_atom(self, ln):
         ln = ln.split()

@@ -194,6 +194,11 @@ def split_mpf_target(IX, Y, levels,
         # Add as filter if MSD deemed significant
         filter_centre_msd_threshold_0 = msd_0 + msd_threshold_k*msd_var_0**0.5
         filter_centre_msd_threshold_1 = msd_1 + msd_threshold_k*msd_var_1**0.5
+
+        if mp_options["normalise_filter_centres"]:
+            X_mean_0 = X_mean_0/np.dot(X_mean_0, X_mean_0)**0.5
+            X_mean_1 = X_mean_1/np.dot(X_mean_1, X_mean_1)**0.5
+
         if filter_centre_msd_0 >= filter_centre_msd_threshold_0:
             filters.append({
                 "idcs": None, "L": None, "n_filters": 1,
@@ -858,6 +863,7 @@ def bipartite_mp_transform_btree(state, options, log):
     mp_options["x_moment_2"] = np.std(IX_train, axis=0)**2
     mp_options["x_moment_4"] = np.average(IX_train**4, axis=0)
     mp_options["append_filter_centres"] = options["bipartite_mp_transform_btree"]["append_filter_centres"]
+    mp_options["normalise_filter_centres"] = options["bipartite_mp_transform_btree"]["normalise_filter_centres"]
     mp_options["msd_threshold_coeff"] = options["bipartite_mp_transform_btree"]["msd_threshold_coeff"]
 
     # RECURSIVELY (=HIERARCHICALLY) APPLY MP FILTERING TO DATASET
@@ -898,10 +904,22 @@ def bipartite_mp_transform_btree(state, options, log):
         # TODO Add filter centres "mu" as filters?
         log << "level:partition {level:02d}:{partition:02d}   # filters {n_filters:2d}   y-bounds [{y_min:+1.2f}, {y_max:+1.2f}]".format(**filter_) << log.endl
         if filter_["n_filters"] == 0: continue
+
         IU_train = rmt.utils.div0(IX_train-filter_["mu"], filter_["std"]).dot(filter_["V"])
         IU_test = rmt.utils.div0(IX_test-filter_["mu"], filter_["std"]).dot(filter_["V"])
-        #IU_train = ((IX_train)/filter_["std"]).dot(filter_["V"])
-        #IU_test = ((IX_test)/filter_["std"]).dot(filter_["V"])
+
+        #IU_train = (IX_train-filter_["mu"]).dot(filter_["V"])
+        #IU_test = (IX_test-filter_["mu"]).dot(filter_["V"])
+
+        #IU_train = (IX_train-filter_["mu"]).dot((filter_["V"].T*filter_["std"]).T)
+        #IU_test = (IX_test-filter_["mu"]).dot((filter_["V"].T*filter_["std"]).T)
+
+        #IU_train = (IX_train-filter_["mu"]).dot(rmt.utils.div0(filter_["V"].T, filter_["std"]).T)
+        #IU_test = (IX_test-filter_["mu"]).dot(rmt.utils.div0(filter_["V"].T, filter_["std"]).T)
+
+        #IU_train = rmt.utils.div0(IX_train, filter_["std"]).dot(filter_["V"])
+        #IU_test = rmt.utils.div0(IX_test, filter_["std"]).dot(filter_["V"])
+
         IUs_train.append(IU_train)
         IUs_test.append(IU_test)
         IVs.append(filter_["V"])
@@ -970,7 +988,7 @@ def mpf_kernel(state, options, log):
     K2_train, K2_cross = rmt.kernel_dot_tf(
         state["IX_train_cached"], 
         state["IX_test_cached"], 
-        { "tf": tf2 })
+        { "tf": tf2, "normalise": normalise })
     if verbose:
         print "K2_train", K2_train
         print "K2_cross", K2_cross

@@ -38,6 +38,11 @@ def zscore(IX):
 def apply_zscore(IX, X_mean, X_std):
     return div0(IX-X_mean, X_std)
 
+def r2_value_from_fit(x, y):
+    import scipy.stats
+    slope, intercept, r_value, p_value, std_err = scipy.stats.linregress(x, y)
+    return r_value
+
 def dict_lookup_path(dictionary, path):
     path = path.split('/')
     v = dictionary
@@ -89,4 +94,45 @@ def dict_compile_linear(options, fields):
             dict_set_path(options_mod, field[0], field[1][i])
         options_array.append(options_mod)
     return options_array
+
+def color_hex_to_int(c):
+    return int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+
+def color_int_to_hex(r, g, b):
+    return "#%02x%02x%02x" % (r, g, b)
+
+def color_interpolate(c1, c2, f):
+    r1, g1, b1 = color_hex_to_int(c1)
+    r2, g2, b2 = color_hex_to_int(c2)
+    r = int(r1 + (r2-r1)*f + 0.5)
+    g = int(g1 + (g2-g1)*f + 0.5)
+    b = int(b1 + (b2-b1)*f + 0.5)
+    return color_int_to_hex(r, g, b)
+
+def plot_gp_semilogx(mat, x, y, 
+        lt='-', lw=1.0, lcol='#333333', 
+        mt='o', ms=3.0, mcol='#999999', medgecol='#333333', mlw=2.0, 
+        n=100, sigma=3, reg=0.001, 
+        xerr=None, yerr=None):
+    x_gp, y_gp = rmt.nonlinear.gp_interpolate_1d(np.log(x), y, n, sigma, reg)
+    mat.semilogx(np.exp(x_gp), y_gp, lt, markersize=0, linewidth=lw, color=lcol)
+    mat.semilogx(x, y, mt, markersize=ms, linewidth=lw, color=mcol, markeredgecolor=medgecol, markeredgewidth=mlw)
+    if type(xerr) != type(None) or type(yerr) != type(None):
+        mat.errorbar(x, y, xerr=xerr, yerr=yerr, fmt="none", ecolor=lcol, elinewidth=0.5*lw)
+    return mat
+
+def plot_loglog(mat, x, y, 
+        lt=None, lw=1.0, lcol=None, 
+        mt=None, ms=3.0, mcol='#999999', medgecol='#333333', mlw=2.0, 
+        n=None, sigma=None, reg=None):
+    mat.loglog(x, y, mt, markersize=ms, linewidth=lw, color=mcol, markeredgecolor=medgecol, markeredgewidth=mlw)
+    return mat
+
+def plot_scatter(mat, x, y, 
+        lt='-', lw=1.0, lcol='#333333', 
+        mt='o', ms=3.0, mcol='#999999', medgecol='#333333', mlw=2.0, 
+        n=100, sigma=3, reg=0.001, 
+        xerr=None, yerr=None):
+    mat.scatter(x, y, s=ms, marker=mt, linewidths=mlw, c=mcol, edgecolors=medgecol)
+    return mat
 

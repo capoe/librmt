@@ -17,6 +17,7 @@ def evaluate(
     build_models,   # Function f(arg: options_build) called to create models
     log,            # Logger
     silent = False,
+    hyper_every = 0,
     check_options = (lambda opt: True),     # Function f(arg: options_models) used to check option validity
     update_options = (lambda opt, i: opt)): # function f(arg: options_models, arg: options_meta, i_rep) called to update options for repetition i_rep
 
@@ -101,7 +102,10 @@ def evaluate(
                 # UPDATE OPTIONS FOR THIS REPETITION
                 options = update_options(options, options_meta, i)
                 # Optimise hyperparameters
-                if options_meta["opt_hyper"] and model_dict[model].hyper != None and hyper_is_optimized == False:
+                do_hyper = (options_meta["opt_hyper"] and model_dict[model].hyper != None and hyper_is_optimized == False)
+                if hyper_every > 0 and (i % hyper_every) == 0 and options_meta["opt_hyper"]:
+                    do_hyper = True
+                if do_hyper:
                     hyper = model_dict[model].hyper
                     options_hyper_set = rmt.utils.dict_compile(
                         options, 
