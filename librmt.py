@@ -338,7 +338,7 @@ def load_targets(state, options, log):
         key = options['target_key']
         fct = options['target_conv_fct']
         T = np.array([ fct(config.info[key]) for config in state["configs"] ])
-    log << "<t>" << np.average(T) << log.endl
+    log << "<t>" << np.average(T) << "(min, max =" << np.min(T) << np.max(T) << ")" << log.endl
     log << "sqrt<dt^2>" << np.std(T) << log.endl
     state.register("load_targets", options)
     state["T"] = T
@@ -398,8 +398,15 @@ def compute_descriptor_morgan(state, options, log):
     log << log.item << "Bit length:" << length << log.endl
     # SMILES to molecule
     log << "Generating molecules from smiles ..." << log.endl
+    for c in configs:
+        print c.info
     smiles = [ config.info['smiles'] for config in configs ]
     mols = [chem.MolFromSmiles(c) for c in smiles]
+    #for config, c in zip(configs, smiles):
+    #    mol = chem.MolFromSmiles(c)
+    #    if str(type(mol)) != "<class 'rdkit.Chem.rdchem.Mol'>":
+    #        print config.info
+    #        raise ValueError("Could not create molecule from SMILES")
     # Compute
     log << "Computing fingerprints ..." << log.endl
     fingerprints = [chem.GetMorganFingerprintAsBitVect(mol, radius=morgan_radius,
@@ -1427,6 +1434,7 @@ def kernel_rr(state, options, log):
     out_train = np.array([y_train, T_train]).T
     out_test = np.array([y_test, T_test]).T
     res = {
+        'krr': krrbox,
         't_train_avg': state["t_average"] if "t_average" in state else 0.0,
         'T_train_pred': y_train,
         'T_test_pred': y_test,

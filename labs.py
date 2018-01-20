@@ -133,7 +133,11 @@ def split_mpf_target(IX, Y, levels,
         min_interval, deep_mp=False, mp_options={}, idcs=None, 
         filters=[], this_level=1, split="average", log=None):
     # Split threshold
-    if split == "average":
+    if type(split) != str:
+        log << "Hierarchical decomposition using" << split << log.endl
+        y_split = split[0]
+        split = split[1]
+    elif split == "average":
         y_split = np.average(Y)
     elif split == "median":
         y_split = np.median(Y)
@@ -831,7 +835,14 @@ def bipartite_mp_transform_btree(state, options, log):
     n_levels = options["bipartite_mp_transform_btree"]["n_levels"]
     std_scale = options["bipartite_mp_transform_btree"]["min_interval"]
     deep_mp = options["bipartite_mp_transform_btree"]["deep_mp"]
+    if "t_average" in state:
+        t_average = state["t_average"]
+    else:
+        t_average = 0.0
     split = options["bipartite_mp_transform_btree"]["split"]
+    if type(split) != str:
+        log << "Correcting split instruction" << split << "for target shift" << t_average << log.endl
+        split[0] = split[0] - t_average
     verbose = False
     T_train = state["T_train"]
     T_test = state["T_test"]
