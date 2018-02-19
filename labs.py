@@ -72,41 +72,47 @@ def hierarchical_clustering(
             log << "Cluster %d |c| %d" % (cidx, len(c["nodes"])) << log.endl
     return filter(lambda c: len(c["nodes"]) >= min_size, clusters)
 
-def dendrogram_plot(D, tags):
+def dendrogram_plot(D, tags, draw=True):
     import scipy
     import pylab
     # Compute and plot first dendrogram.
-    fig = pylab.figure(figsize=(16,16))
-    ax1 = fig.add_axes([0.09,0.1,0.2,0.6])
+    if draw: 
+        fig = pylab.figure(figsize=(16,16))
+        ax1 = fig.add_axes([0.09,0.1,0.2,0.6])
     Y = sch.linkage(D, method='centroid')
     Z1 = sch.dendrogram(Y, orientation='right')
-    ax1.set_xticks([])
-    ax1.set_yticks([])
+    if draw:
+        ax1.set_xticks([])
+        ax1.set_yticks([])
     # Compute and plot second dendrogram.
-    ax2 = fig.add_axes([0.3,0.71,0.6,0.2])
+    if draw:
+        ax2 = fig.add_axes([0.3,0.71,0.6,0.2])
     Y = sch.linkage(D, method='centroid') # 'single'
     Z2 = sch.dendrogram(Y)
-    ax2.set_xticks([])
-    ax2.set_yticks([])
-    # Plot distance matrix.
-    axmatrix = fig.add_axes([0.3,0.1,0.6,0.6])
     idx1 = Z1['leaves']
     idx2 = Z2['leaves']
-    D = D[idx1,:]
-    D = D[:,idx2]
-    im = axmatrix.matshow(D, aspect='auto', origin='lower', cmap=pylab.cm.YlGnBu)
-    #axmatrix.set_xticks([])
-    #axmatrix.set_yticks([])
-    axmatrix.tick_params(labelsize=5.0)
-    axmatrix.set_xticks(np.arange(D.shape[0]))
-    axmatrix.set_yticks(np.arange(D.shape[0]))
-    axmatrix.set_xticklabels(tags[idx1], rotation=90.)
-    axmatrix.set_yticklabels(tags[idx2], rotation=0.)
-    # Plot colorbar.
-    axcolor = fig.add_axes([0.91,0.1,0.02,0.6])
-    pylab.colorbar(im, cax=axcolor)
-    fig.show()
-    fig.savefig('dendrogram.svg')
+    if draw:
+        ax2.set_xticks([])
+        ax2.set_yticks([])
+        # Plot distance matrix.
+        axmatrix = fig.add_axes([0.3,0.1,0.6,0.6])
+        D = D[idx1,:]
+        D = D[:,idx2]
+        im = axmatrix.matshow(D, aspect='auto', origin='lower', cmap=pylab.cm.YlGnBu)
+        #axmatrix.set_xticks([])
+        #axmatrix.set_yticks([])
+        axmatrix.tick_params(labelsize=5.0)
+        axmatrix.set_xticks(np.arange(D.shape[0]))
+        axmatrix.set_yticks(np.arange(D.shape[0]))
+        axmatrix.set_xticklabels(tags[idx1], rotation=90.)
+        axmatrix.set_yticklabels(tags[idx2], rotation=0.)
+        # Plot colorbar.
+        axcolor = fig.add_axes([0.91,0.1,0.02,0.6])
+        pylab.colorbar(im, cax=axcolor)
+        fig.show()
+        fig.savefig('dendrogram.svg')
+    if draw: fig.clear()
+    return idx1
 
 def fps(D, n_select, i0):
     # Farthest-point sampling of a total of n_select points 

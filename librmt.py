@@ -18,6 +18,7 @@ import labs as labs
 import utils as utils
 import launch as launch
 import hamiltonian as hamiltonian
+import sklearn.metrics
 from state import State
 from pipe import Pipe
 # External libraries
@@ -356,6 +357,9 @@ def normalise_targets(state, options, log):
     fct = options['target_conv_fct']
     T_train = state["T_train"]
     T_test = state["T_test"]
+    log << "Before normalisation" << log.endl
+    log << "<t_train> min, avg, max, std =" << np.min(T_train) << np.average(T_train) << np.max(T_train) << np.std(T_train) << log.endl
+    log << "<t_test>  min, avg, max, std =" << np.min(T_test) << np.average(T_test) << np.max(T_test) << np.std(T_test) << log.endl
     if fct:
         T_train = fct(T_train)
         T_test = fct(T_test)
@@ -369,8 +373,11 @@ def normalise_targets(state, options, log):
     state["T_train"] = T_train
     state["T_test"] = T_test
     state["t_average"] = T_train_avg
-    log << "<t_train>" << np.average(T_train) << np.std(T_train) << log.endl
-    log << "<t_test>" << np.average(T_test) << np.std(T_test) << log.endl
+    log << "After normalisation" << log.endl
+    #log << "<t_train>" << np.average(T_train) << np.std(T_train) << log.endl
+    #log << "<t_test>" << np.average(T_test) << np.std(T_test) << log.endl
+    log << "<t_train> min, avg, max, std =" << np.min(T_train) << np.average(T_train) << np.max(T_train) << np.std(T_train) << log.endl
+    log << "<t_test>  min, avg, max, std =" << np.min(T_test) << np.average(T_test) << np.max(T_test) << np.std(T_test) << log.endl
     log << "t_average" << T_train_avg << log.endl
     log.prefix = log.prefix[0:-7]
     return state
@@ -1008,6 +1015,8 @@ def learn(state, options, log, verbose=False):
     mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
     spearmanr_train = scipy.stats.spearmanr(T_train_pred, T_train).correlation
     spearmanr_test = scipy.stats.spearmanr(T_test_pred, T_test).correlation
+    r2_fit = utils.r2_value_from_fit(T_test_pred, T_test)
+    r2 = sklearn.metrics.r2_score(T_test, T_test_pred)
     #np.savetxt('out.learn_train.txt', np.array([T_train, T_train_pred]).T)
     #np.savetxt('out.learn_test.txt', np.array([T_test, T_test_pred]).T)
     # RETURN RESULTS OBJECT
@@ -1027,7 +1036,9 @@ def learn(state, options, log, verbose=False):
         'n_train': n_train,
         'n_test': n_test,
         'std_data_train': np.std(state["T_train"]),
-        'std_data_test': np.std(state["T_test"])
+        'std_data_test': np.std(state["T_test"]),
+        'r2_fit': r2_fit,
+        'r2': r2
     }
     log.prefix = log.prefix[0:-7]
     return state, res
@@ -1335,6 +1346,7 @@ def kernel_svm_binary(state, options, log):
     if K_test.shape[0] > 0:
         # Predict
         y_score = clf.decision_function(K_test**xi)
+        y_pred = clf.predict(K_test**xi)
         # Compute AUC
         auc_out, mcc_out, acc_out, prec_out, rec_out, res = compute_auc_threshold(
             class_list=y_true, 
@@ -1343,7 +1355,13 @@ def kernel_svm_binary(state, options, log):
             appears_positive = lambda sigma, threshold: sigma > threshold,
             invert=False,
             ds=0.001,
-            outfile='roc.tab') #'roc_class-%d_xi-%1.0f.tab' % (i, xi))
+            outfile=None) #'roc.tab') #'roc_class-%d_xi-%1.0f.tab' % (i, xi))
+        #print auc_out
+        #print mcc_out
+        #auc = sklearn.metrics.roc_auc_score(y_true, y_score)
+        #mcc = sklearn.metrics.matthews_corrcoef(y_true, y_pred)
+        #auc_out = auc
+        #mcc_out = [ mcc, 0.0 ]
     else:
         log << log.my << "WARNING No samples in test set, skip predictions" << log.endl
         y_score = np.array([])
@@ -1469,6 +1487,8 @@ def kernel_rr(state, options, log):
     # Store
     out_train = np.array([y_train, T_train]).T
     out_test = np.array([y_test, T_test]).T
+    r2_fit = utils.r2_value_from_fit(y_test, T_test)
+    r2 = sklearn.metrics.r2_score(T_test, y_test)
     res = {
         'krr': krrbox,
         'model': krrbox,
@@ -1486,7 +1506,9 @@ def kernel_rr(state, options, log):
         'std_data_train': np.std(state["T_train"]),
         'std_data_test': np.std(state["T_test"]),
         'n_train': y_train.shape[0],
-        'n_test': y_test.shape[0]
+        'n_test': y_test.shape[0],
+        'r2_fit': r2_fit,
+        'r2': r2
     }
     return state, res
 
