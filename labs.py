@@ -159,28 +159,46 @@ def split_mpf_target(IX, Y, levels,
         return filters
     IX_0, X_mean_0, X_std_0 = rmt.utils.zscore(IX_0)
     IX_1, X_mean_1, X_std_1 = rmt.utils.zscore(IX_1)
-    if deep_mp == False:
-        # Lower partition
-        L_0, V_0, _X_mean_0, _X_std_0 = mp_transform(IX_0, False, False, log)
-        # Upper partition
-        L_1, V_1, _X_mean_1, _X_std_1 = mp_transform(IX_1, False, False, log)
-    else:
-        V_0 = hpcamp(IX_0, mp_options, log=log if VERBOSE else None)
-        L_0 = np.array([])
-        V_1 = hpcamp(IX_1, mp_options, log=log if VERBOSE else None)
-        L_1 = np.array([])
-    # NOTE HACK TO CHECK THAT/WHETHER PCs ARE A BETTER CHOICE THAN RANDOM VECTORS
-    #V_0 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
-    #V_1 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
-    filters.append({ 
-        "idcs": idcs[idcs_0], "L": L_0, "n_filters": V_0.shape[1], 
-        "V": V_0, "mu": X_mean_0, "std": X_std_0, "y_min": y_min, "y_max": y_split, 
-        "partition": 0, "level": this_level })
-    filters.append({ 
-        "idcs": idcs[idcs_1], "L": L_1, "n_filters": V_1.shape[1], 
-        "V": V_1, "mu": X_mean_1, "std": X_std_1, 
-        "y_min": y_split, "y_max": y_max, 
-        "partition": 1, "level": this_level })
+    if mp_options["append_filters_mp"]:
+        if deep_mp == False:
+            # Lower partition
+            L_0, V_0, _X_mean_0, _X_std_0 = mp_transform(IX_0, False, False, log)
+            # Upper partition
+            L_1, V_1, _X_mean_1, _X_std_1 = mp_transform(IX_1, False, False, log)
+        else:
+            V_0 = hpcamp(IX_0, mp_options, log=log if VERBOSE else None)
+            L_0 = np.array([])
+            V_1 = hpcamp(IX_1, mp_options, log=log if VERBOSE else None)
+            L_1 = np.array([])
+        # NOTE HACK TO CHECK THAT/WHETHER PCs ARE A BETTER CHOICE THAN RANDOM VECTORS
+        #V_0 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
+        #V_1 = rmt.utils.generate_orthonormal_vectors(V_0.shape[1], V_0.shape[0]).T
+        filters.append({ 
+            "idcs": idcs[idcs_0], "L": L_0, "n_filters": V_0.shape[1], 
+            "V": V_0, "mu": X_mean_0, "std": X_std_0, "y_min": y_min, "y_max": y_split, 
+            "partition": 0, "level": this_level })
+        filters.append({ 
+            "idcs": idcs[idcs_1], "L": L_1, "n_filters": V_1.shape[1], 
+            "V": V_1, "mu": X_mean_1, "std": X_std_1, 
+            "y_min": y_split, "y_max": y_max, 
+            "partition": 1, "level": this_level })
+
+    if ("append_filters_mp_bimodal" in mp_options) and mp_options["append_filters_mp_bimodal"]:
+        if deep_mp: raise NotImplementedError("TODO mp_bimodal=True and deep_mp=True")
+        avg_0 = np.average(Y_0)
+        avg_1 = np.average(Y_1)
+        idcs_00 = np.where(Y < avg_0)[0]
+        idcs_11 = np.where(Y > avg_1)[0]
+        idcs_01 = np.concatenate([idcs_00, idcs_11])
+        IX_01 = IX[idcs_01]
+        Y_01 = Y[idcs_01]
+        IX_01, X_mean_01, X_std_01 = rmt.utils.zscore(IX_01)
+        L_01, V_01, _X_mean_01, _X_std_01 = mp_transform(IX_01, False, False, log)
+        filters.append({ 
+            "idcs": idcs[idcs_01], "L": L_01, "n_filters": V_01.shape[1], 
+            "V": V_01, "mu": X_mean_01, "std": X_std_01, 
+            "y_min": y_min, "y_max": y_max, 
+            "partition": -1, "level": this_level })
 
     if mp_options["append_filter_centres"]:
         x_moment_2 = mp_options["x_moment_2"] # np.std(IX, axis=0)**2
@@ -873,6 +891,8 @@ def bipartite_mp_transform_btree(state, options, log):
 
     mp_options["x_moment_2"] = np.std(IX_train, axis=0)**2
     mp_options["x_moment_4"] = np.average(IX_train**4, axis=0)
+    mp_options["append_filters_mp"] = options["bipartite_mp_transform_btree"]["append_filters_mp"]
+    mp_options["append_filters_mp_bimodal"] = options["bipartite_mp_transform_btree"]["append_filters_mp_bimodal"]
     mp_options["append_filter_centres"] = options["bipartite_mp_transform_btree"]["append_filter_centres"]
     mp_options["normalise_filter_centres"] = options["bipartite_mp_transform_btree"]["normalise_filter_centres"]
     mp_options["msd_threshold_coeff"] = options["bipartite_mp_transform_btree"]["msd_threshold_coeff"]
@@ -881,10 +901,15 @@ def bipartite_mp_transform_btree(state, options, log):
     filters = split_mpf_target(IX_train, T_train, 
         min_interval=std_scale*np.std(T_train), 
         split=split,
+        filters=[],
         levels=n_levels, 
         deep_mp=deep_mp,
         mp_options=mp_options,
         log=log)
+    # Log filters if requested
+    if "data_logger" in state:
+        log << "Logging %d filters" % (len(filters)) << log.endl
+        state["data_logger"].append({"tag": "mp_filters", "data": filters})
 
     # NOTE HACK
     #filters = []
@@ -1165,6 +1190,15 @@ def cache_descriptor(state, options, log):
 def uncache_descriptor(state, options, log):
     log << log.mg << "Uncaching descriptor" << log.endl
     log << "Descriptor dimension before uncaching: %d" % state["IX_train"].shape[1] << log.endl
+    if "data_logger" in state:
+        log << "Logging index assignment" << log.endl
+        i0 = 0
+        i1 = state["IX_train"].shape[1]
+        i2 = i1 + state["IX_train_cached"].shape[1]
+        state["data_logger"].append({
+            "tag": "uncache",
+            "data": { "cached": [i1, i2], "base": [i0, i1] }
+        })
     state["IX_train"] = np.concatenate(
         [state["IX_train"], state["IX_train_cached"]], axis=1)
     state["IX_test"] = np.concatenate(

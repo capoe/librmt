@@ -8,6 +8,7 @@ import datetime
 import os
 import numpy.linalg as la
 import scipy.integrate
+import scipy.stats
 import copy
 import csv
 # Internal libraries
@@ -643,6 +644,7 @@ def clean_descriptor_pca_by_class(state, options, log):
 
 def clean_descriptor_pca(state, options, log):
     log.prefix += '[dtor] '
+    output_eigenspectrum = False
     if 'clean_descriptor_pca' in options:
         options = options['clean_descriptor_pca']
     log << log.mg << "Transform descriptor <clean_descriptor_pca>" << log.endl
@@ -692,8 +694,9 @@ def clean_descriptor_pca(state, options, log):
     for i in range(bin_edges.shape[0]-1):
         bin_centres[i] = 0.5*(bin_edges[i]+bin_edges[i+1])
     mp_sample = dist_mp_sample(bin_centres, mp_gamma)
-    np.savetxt('out.pca_hist.txt', np.array([ bin_centres, hist, mp_sample, hist_signal ]).T)
-    np.savetxt('out.pca_eigv.txt', L.diagonal())
+    if output_eigenspectrum:
+        np.savetxt('out.pca_hist.txt', np.array([ bin_centres, hist, mp_sample, hist_signal ]).T)
+        np.savetxt('out.pca_eigv.txt', L.diagonal())
     # TRANSFORM INTO PCA SPACE
     log << log.mg << "Project onto signal PCs" << log.endl
 
@@ -772,6 +775,27 @@ def normalize_descriptor_zscore_deprecated(IX, ddof_=1):
     IZ = utils.div0(IX - muTile, stdTile)
     return IZ, mu, std
 
+def normalise_descriptor_centre(state, options, log):
+    log.prefix += '[desc] '
+    IX_train = state["IX_train"]
+    IX_test = state["IX_test"]
+    if IX_train.shape[1] > 0:
+        log << log.mg << "Centering descriptor" << log.endl
+        # Normalise
+        X_mean = np.mean(IX_train, axis=0)
+        log << "Mean min max:" << np.min(X_mean) << np.max(X_mean) << log.endl
+        IX_train_norm = IX_train - X_mean
+        IX_test_norm  = IX_test - X_mean
+        # Store
+        state.register("normalise_descriptor_centre", options)
+        state["IX_train"] = IX_train_norm
+        state["IX_test"] = IX_test_norm
+        state["X_mean"] = X_mean
+    else:
+        print "WARNING Cannot z-score 0-dimensional descriptor"
+    log.prefix = log.prefix[:-7]
+    return state
+
 def normalise_descriptor_zscore(state, options, log):
     log.prefix += '[desc] '
     if "normalise_descriptor_zscore" in options:
@@ -794,6 +818,12 @@ def normalise_descriptor_zscore(state, options, log):
             state["IX_test"] = IX_test_norm
             state["X_mean"] = X_mean
             state["X_std"] = X_std
+            if "data_logger" in state:
+                log << "Logging z-score mean and std" << log.endl
+                state["data_logger"].append({
+                    "tag": "zscore", 
+                    "data": { "mean": X_mean, "std": X_std }
+                })
         else:
             print "WARNING Cannot z-score 0-dimensional descriptor"
     log.prefix = log.prefix[:-7]
@@ -976,6 +1006,8 @@ def learn(state, options, log, verbose=False):
     rmse_test = (np.sum((T_test_pred-T_test)**2)/n_test)**0.5
     mae_train = np.sum(np.abs(T_train_pred-T_train))/n_train
     mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
+    spearmanr_train = scipy.stats.spearmanr(T_train_pred, T_train).correlation
+    spearmanr_test = scipy.stats.spearmanr(T_test_pred, T_test).correlation
     #np.savetxt('out.learn_train.txt', np.array([T_train, T_train_pred]).T)
     #np.savetxt('out.learn_test.txt', np.array([T_test, T_test_pred]).T)
     # RETURN RESULTS OBJECT
@@ -989,6 +1021,8 @@ def learn(state, options, log, verbose=False):
         'rmse_test': rmse_test,
         'mae_train': mae_train,
         'mae_test': mae_test,
+        'spearmanr_train': spearmanr_train,
+        'spearmanr_test': spearmanr_test,
         'model': regr,
         'n_train': n_train,
         'n_test': n_test,
@@ -1430,11 +1464,14 @@ def kernel_rr(state, options, log):
     rmse_test = rms_error(y_test, T_test)
     mae_train = np.sum(np.abs(y_train-T_train))/y_train.shape[0]
     mae_test = np.sum(np.abs(y_test-T_test))/y_test.shape[0]
+    spearmanr_train = scipy.stats.spearmanr(y_train, T_train).correlation
+    spearmanr_test = scipy.stats.spearmanr(y_test, T_test).correlation
     # Store
     out_train = np.array([y_train, T_train]).T
     out_test = np.array([y_test, T_test]).T
     res = {
         'krr': krrbox,
+        'model': krrbox,
         't_train_avg': state["t_average"] if "t_average" in state else 0.0,
         'T_train_pred': y_train,
         'T_test_pred': y_test,
@@ -1444,6 +1481,8 @@ def kernel_rr(state, options, log):
         'rmse_test': rmse_test,
         'mae_train': mae_train,
         'mae_test': mae_test,
+        'spearmanr_train': spearmanr_train,
+        'spearmanr_test': spearmanr_test,
         'std_data_train': np.std(state["T_train"]),
         'std_data_test': np.std(state["T_test"]),
         'n_train': y_train.shape[0],
@@ -1460,17 +1499,24 @@ def kernel_dot(IX_train, IX_test, options):
         norm_train = np.tile(norm_train, (n_dim,1)).T
         norm_test = np.sum(IX_test*IX_test, axis=1)**0.5
         norm_test = np.tile(norm_test, (n_dim,1)).T
-        IX_train_norm = IX_train / norm_train
-        IX_test_norm = IX_test / norm_test
+        #IX_train_norm = IX_train / norm_train
+        #IX_test_norm = IX_test / norm_test
+        IX_train_norm = utils.div0(IX_train, norm_train)
+        IX_test_norm  = utils.div0(IX_test, norm_test)
     else:
         IX_train_norm = IX_train
         IX_test_norm = IX_test
     return IX_train_norm.dot(IX_train_norm.T)**xi, IX_test_norm.dot(IX_train_norm.T)**xi
 
 def kernel_dot_tf(IX_train, IX_test, options):
+    #print IX_train
+    #print np.min(IX_train), np.average(IX_train), np.max(IX_train)
     K_train, K_cross = kernel_dot(IX_train, IX_test, { "xi": 1, "normalise": options["normalise"] })
     K_train = options["tf"](K_train)
     K_cross = options["tf"](K_cross)
+    #print K_train
+    #print np.min(K_train), np.average(K_train), np.max(K_train)
+    #raw_input('...')
     return K_train, K_cross
 
 def shift_kernel(state, options, log):
@@ -1488,6 +1534,7 @@ def compute_kernel_train_test(state, options, log):
     kernel_fct = kernel_method_factory[kernel_method]
     log << "Kernel type: '%s'" % kernel_method << log.endl
     K_train, K_test = kernel_fct(state["IX_train"], state["IX_test"], suboptions)
+    log << "Kernel computation complete" << log.endl
     state.register("compute_kernel_train_test", options)
     if state["has_K"]:
         log << log.my << "WARNING Overwriting existing kernel" << log.endl
