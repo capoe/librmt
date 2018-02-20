@@ -16,6 +16,7 @@ def evaluate(
     load_state,     # Function f(arg: options_state) called to create state
     build_models,   # Function f(arg: options_build) called to create models
     log,            # Logger
+    channel = 'out',
     silent = False,
     hyper_every = 0,
     return_state = False,
@@ -163,7 +164,7 @@ def evaluate(
                     log << "Recording output state" << log.endl
                     record["state"] = state_clone
                 for field in options_meta["store"]: 
-                    record[field] = out["out"][field]
+                    record[field] = out[channel][field]
                     log << "%20s = %-20s" % (field, repr(record[field])) << log.endl
                 records.append(record)
                 if options_meta["filelog"] and len(records) % 10 == 0:

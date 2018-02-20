@@ -225,6 +225,19 @@ def remove_duplicates(array, key=lambda a: a):
     len_out = len(array_curated)
     return array_curated, array_duplicates
 
+def import_hdf5_basic(state, options, log):
+    f = h5py.File(options["import_hdf5_basic"]["hdf5_file"], 'r')
+    state['IX'] = f['IX'].value
+    state['has_IX'] = True
+    state['T'] = f['T'].value
+    state['has_T'] = True
+    configs = []
+    for i in range(state['IX'].shape[0]):
+        configs.append(soap.soapy.momo.ExtendableNamespace())
+        configs[-1].info = { 'idx': i, 'tag': 's%06d' % i }
+    state['configs'] = configs
+    return state
+
 def import_hdf5(state, options, log):
     log.prefix += '[load] '
     if "import_hdf5" in options:
