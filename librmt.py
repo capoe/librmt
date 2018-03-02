@@ -1003,6 +1003,62 @@ def split_test_train(state, options, log):
     log.prefix = log.prefix[0:-7]
     return state
 
+def random_forest_regression(state, options, log):
+    log.prefix += '[pred] '
+    verbose = False
+    if "random_forest_regression" in options:
+        options = options["random_forest_regression"]
+    if verbose: log << log.mg << "Learn via RNDF" << log.endl
+    from sklearn.ensemble import RandomForestRegressor
+    if verbose: log << "Imported RNDF" << log.endl
+    T_train = state["T_train"]
+    T_test = state["T_test"]
+    n_train = state["n_train"]
+    n_test = state["n_test"]
+    # FIT
+    regr = RandomForestRegressor(**options)
+    regr.fit(state["IX_train"], T_train)
+    # PREDICT
+    T_train_pred = regr.predict(state["IX_train"])
+    T_test_pred = regr.predict(state["IX_test"])
+    # EVALUATE ERRORS
+    rmse_train = (np.sum((T_train_pred-T_train)**2)/n_train)**0.5
+    rmse_test = (np.sum((T_test_pred-T_test)**2)/n_test)**0.5
+    mae_train = np.sum(np.abs(T_train_pred-T_train))/n_train
+    mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
+    spearmanr_train = scipy.stats.spearmanr(T_train_pred, T_train).correlation
+    spearmanr_test = scipy.stats.spearmanr(T_test_pred, T_test).correlation
+    r2_fit = utils.r2_value_from_fit(T_test_pred, T_test)
+    r2 = sklearn.metrics.r2_score(T_test, T_test_pred)
+    # RETURN RESULTS OBJECT
+    res = {
+        't_train_avg': state["t_average"] if "t_average" in state else 0.0,
+        'T_train_pred': T_train_pred,
+        'T_test_pred': T_test_pred,
+        'T_train': np.copy(state["T_train"]),
+        'T_test': np.copy(state["T_test"]),
+        'rmse_train': rmse_train,
+        'rmse_test': rmse_test,
+        'mae_train': mae_train,
+        'mae_test': mae_test,
+        'spearmanr_train': spearmanr_train,
+        'spearmanr_test': spearmanr_test,
+        'model': regr,
+        'n_train': n_train,
+        'n_test': n_test,
+        'std_data_train': np.std(state["T_train"]),
+        'std_data_test': np.std(state["T_test"]),
+        'r2_fit': r2_fit,
+        'r2': r2
+    }
+    log.prefix = log.prefix[0:-7]
+    return state, res
+
+
+
+    return state
+
+
 def learn(state, options, log, verbose=False):
     log.prefix += '[pred] '
     if 'learn' in options:
