@@ -20,6 +20,7 @@ def evaluate(
     silent = False,
     hyper_every = 0,
     return_state = False,
+    log_state_keys = [],
     check_options = (lambda opt: True),     # Function f(arg: options_models) used to check option validity
     update_options = (lambda opt, i: opt)): # function f(arg: options_models, arg: options_meta, i_rep) called to update options for repetition i_rep
 
@@ -163,6 +164,9 @@ def evaluate(
                 if return_state:
                     log << "Recording output state" << log.endl
                     record["state"] = state_clone
+                for key in log_state_keys:
+                    if key in state_clone:
+                        record[key] = state_clone[key]
                 for field in options_meta["store"]: 
                     record[field] = out[channel][field]
                     log << "%20s = %-20s" % (field, repr(record[field])) << log.endl

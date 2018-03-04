@@ -1030,6 +1030,17 @@ def random_forest_regression(state, options, log):
     spearmanr_test = scipy.stats.spearmanr(T_test_pred, T_test).correlation
     r2_fit = utils.r2_value_from_fit(T_test_pred, T_test)
     r2 = sklearn.metrics.r2_score(T_test, T_test_pred)
+
+    #short = np.where(regr.feature_importances_ > 0.0)[0]
+    #lmin = np.min(np.log10(regr.feature_importances_[short]))
+    #lmax = np.max(np.log10(regr.feature_importances_[short]))
+    #print lmin, lmax
+    #for i in range(state["IX_tags"].shape[1]):
+    #    barlength = int(20*(np.log10(regr.feature_importances_[i]+1e-20)-lmin)/(lmax-lmin))
+    #    if barlength < 0: barlength = 0
+    #    bar = barlength*"+"
+    #    print "%15s %+1.4e   %s" % (state["IX_tags"][0][i], regr.feature_importances_[i], bar)
+    #raw_input('...')
     # RETURN RESULTS OBJECT
     res = {
         't_train_avg': state["t_average"] if "t_average" in state else 0.0,
