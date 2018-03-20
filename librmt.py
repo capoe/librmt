@@ -891,7 +891,7 @@ def pca_compute(IX, log=None, norm_div_std=True, norm_sub_mean=True, ddof=1, eps
 # ========
 
 def split_test_train(state, options, log):
-    log.prefix += '[pred] '
+    if log: log.prefix += '[pred] '
     if 'split_test_train' in options:
         options = options['split_test_train']
     if "stride_shift" in options:
@@ -902,7 +902,7 @@ def split_test_train(state, options, log):
         seed = options["seed"]
     else:
         seed = None
-    log << log.mg << "Split onto training and test set" << log.endl
+    if log: log << log.mg << "Split onto training and test set" << log.endl
     # Read options
     subsample_method = options["method"]
     # Calc n_train, n_test
@@ -910,7 +910,7 @@ def split_test_train(state, options, log):
     n_samples = IX.shape[0]
     # Use decision fct?
     if "decision_fct" in options and options["decision_fct"] != None:
-        log << "Using decision function" << log.endl
+        if log: log << "Using decision function" << log.endl
         dfct = options["decision_fct"]
         idcs_test = []
         idcs_train = []
@@ -922,10 +922,11 @@ def split_test_train(state, options, log):
         f_train = options["f_train"]
         n_train = int(f_train*n_samples+0.5)
         n_test = n_samples - n_train
-        log << "Method:" << subsample_method
-        if subsample_method == "stride":
-            log << "(stride = %d)" % stride_shift
-        log << log.endl
+        if log: 
+            log << "Method:" << subsample_method
+            if subsample_method == "stride":
+                log << "(stride = %d)" % stride_shift
+            log << log.endl
         # Subsampling
         idcs_train, idcs_test = soap.soapy.learn.subsample_array(
             np.arange(0, n_samples).tolist(), 
@@ -934,13 +935,14 @@ def split_test_train(state, options, log):
             stride_shift=stride_shift,
             seed=seed)
     elif subsample_method == "mask":
-        log << "Method:" << subsample_method << log.endl
+        if log: log << "Method:" << subsample_method << log.endl
         idcs_train = np.where(options["mask"] > 0)[0]
         idcs_test = np.where(options["mask"] == 0)[0]
     else:
         raise NotImplementedError("subsample_method '%s'" % subsample_method)
-    log << "Train idcs teaser:" << idcs_train[0:5] << log.endl
-    log << "Test  idcs teaser:" << idcs_test[0:5] << log.endl
+    if log:
+        log << "Train idcs teaser:" << idcs_train[0:5] << log.endl
+        log << "Test  idcs teaser:" << idcs_test[0:5] << log.endl
     n_train = len(idcs_train)
     n_test = len(idcs_test)
     # Train
@@ -969,9 +971,10 @@ def split_test_train(state, options, log):
         IY_test = IY[idcs_test]
     # Test
     IX_test = IX[idcs_test]
-    log << "n_samples:" << n_samples << log.endl
-    log << "n_train:" << n_train << log.endl
-    log << "n_test:" << n_test << log.endl
+    if log:
+        log << "n_samples:" << n_samples << log.endl
+        log << "n_train:" << n_train << log.endl
+        log << "n_test:" << n_test << log.endl
     if "labels" in state:
         labels = state["labels"]
         labels_train = [ labels[i] for i in idcs_train ]
@@ -1000,7 +1003,7 @@ def split_test_train(state, options, log):
     if "IY" in state:
         state["IY_train"] = IY_train
         state["IY_test"] = IY_test
-    log.prefix = log.prefix[0:-7]
+    if log: log.prefix = log.prefix[0:-7]
     return state
 
 def random_forest_regression(state, options, log):
