@@ -136,3 +136,16 @@ def plot_scatter(mat, x, y,
     mat.scatter(x, y, s=ms, marker=mt, linewidths=mlw, c=mcol, edgecolors=medgecol)
     return mat
 
+def enable_latex(mpl, font_family='serif'):
+    mpl.rcParams['text.usetex'] = True
+    if font_family == 'sans-serif':
+        mpl.rcParams['text.latex.preamble'] = [r'\usepackage[cm]{sfmath}']
+    mpl.rcParams['font.family'] = font_family
+    mpl.rcParams['font.sans-serif'] = 'cm'
+    return
+
+def mpl_eq(raw):
+    return r"$\displaystyle "+raw+r" $"
+
+
+

@@ -114,79 +114,84 @@ def evaluate(
                         options, 
                         hyper["sweeps"], 
                         "combinatorial")
-                    state_clone = load_state(options_state)
-                    target_out = []
-                    monitor_out = []
-                    tags_out = []
-                    results_out = []
-                    if hyper["break_at"]:
-                        if silent: log.silent = True
-                        out = model_dict[model].apply(state_clone, options, log, stop_at=hyper["break_at"])
-                        log.silent = False
-                        # <-- TODO Fiddle cross-validation in here
-                        if "cv" in hyper:
-                            do_cv = hyper["cv"] # TODO TODO TODO
-                        if do_cv:
-                            IX_back = state_clone["IX"]
-                            IX_train_back = state_clone["IX_train"]
-                            T_train_back = state_clone["T_train"]
-                            configs_back = state_clone["configs"]
-                            configs_train_back = [ configs_back[i] for i in state_clone["idcs_train"] ]
-                            if state_clone["has_K"]:
-                                K_train_back = state_clone["K_train"]
-                                K_test_back = state_clone["K_test"]
-                        for options_hyper in options_hyper_set:
-                            if not do_cv:
-                                out = model_dict[model].apply(state_clone, options_hyper, log, start_at=hyper["break_at"], prefix=False)
-                                target = hyper["target"](out)
-                                target_out.append(target[1])
-                                monitor = hyper["monitor"](out)
-                                monitor_out.append(monitor[1])
-                                opt_hyper_tag = ""
-                                for s in hyper["sweeps"]:
-                                    v = rmt.utils.dict_lookup_path(options_hyper, s[0])
-                                    v = v if type(v) not in [float, int] else "%+1.4e" % v
-                                    opt_hyper_tag += "{}={} ".format(s[0], v)
-                                tags_out.append(opt_hyper_tag)
-                                results_out.append(out)
-                                log << "[hyper] {} {} {:+1.7e}   {} {:+1.7e}".format(opt_hyper_tag, monitor[0], monitor[1], target[0], target[1]) << log.endl
-                            else:
-                                target_out_tmp = []
-                                monitor_out_tmp = []
-                                state_clone["IX"] = IX_train_back
-                                state_clone["T"] = T_train_back
-                                state_clone["configs"] = configs_train_back
-                                for cv_rep in range(hyper["cv_reps_fct"](state_clone, {}, log)):
-                                    if state_clone["has_K"]:
-                                        state_clone["K"] = K_train_back
-                                    state_clone = hyper["cv_split_fct"](state_clone, { "cv_rep": cv_rep }, log)
+                    if len(options_hyper_set) > 1:
+                        state_clone = load_state(options_state)
+                        target_out = []
+                        monitor_out = []
+                        tags_out = []
+                        results_out = []
+                        if hyper["break_at"]:
+                            if silent: log.silent = True
+                            out = model_dict[model].apply(state_clone, options, log, stop_at=hyper["break_at"])
+                            log.silent = False
+                            # <-- TODO Fiddle cross-validation in here
+                            if "cv" in hyper:
+                                do_cv = hyper["cv"] # TODO TODO TODO
+                            if do_cv:
+                                IX_back = state_clone["IX"]
+                                IX_train_back = state_clone["IX_train"]
+                                T_train_back = state_clone["T_train"]
+                                configs_back = state_clone["configs"]
+                                configs_train_back = [ configs_back[i] for i in state_clone["idcs_train"] ]
+                                if state_clone["has_K"]:
+                                    K_train_back = state_clone["K_train"]
+                                    K_test_back = state_clone["K_test"]
+                            for options_hyper in options_hyper_set:
+                                if not do_cv:
                                     out = model_dict[model].apply(state_clone, options_hyper, log, start_at=hyper["break_at"], prefix=False)
                                     target = hyper["target"](out)
-                                    target_out_tmp.append(target[1])
+                                    target_out.append(target[1])
                                     monitor = hyper["monitor"](out)
-                                    monitor_out_tmp.append(monitor[1])
-                                    #print "CV-rep %d" % cv_rep, target[0], target[1]
-                                    #raw_input('..')
-                                target_avg = np.average(target_out_tmp)
-                                target_out.append(target_avg)
-                                monitor_out.append(np.average(monitor_out_tmp))
-                                opt_hyper_tag = ""
-                                for s in hyper["sweeps"]:
-                                    v = rmt.utils.dict_lookup_path(options_hyper, s[0])
-                                    v = v if type(v) not in [float, int] else "%+1.4e" % v
-                                    opt_hyper_tag += "{}={} ".format(s[0], v)
-                                tags_out.append(opt_hyper_tag)
-                                results_out.append(out)
-                                log << "[hyper] {} {} {:+1.7e}   {} {:+1.7e}".format(opt_hyper_tag, monitor[0], monitor[1], target[0], target_avg) << log.endl
+                                    monitor_out.append(monitor[1])
+                                    opt_hyper_tag = ""
+                                    for s in hyper["sweeps"]:
+                                        v = rmt.utils.dict_lookup_path(options_hyper, s[0])
+                                        v = v if type(v) not in [float, int] else "%+1.4e" % v
+                                        opt_hyper_tag += "{}={} ".format(s[0], v)
+                                    tags_out.append(opt_hyper_tag)
+                                    results_out.append(out)
+                                    log << "[hyper] {} {} {:+1.7e}   {} {:+1.7e}".format(opt_hyper_tag, monitor[0], monitor[1], target[0], target[1]) << log.endl
+                                else:
+                                    target_out_tmp = []
+                                    monitor_out_tmp = []
+                                    state_clone["IX"] = IX_train_back
+                                    state_clone["T"] = T_train_back
+                                    state_clone["configs"] = configs_train_back
+                                    for cv_rep in range(hyper["cv_reps_fct"](state_clone, {}, log)):
+                                        if state_clone["has_K"]:
+                                            state_clone["K"] = K_train_back
+                                        state_clone = hyper["cv_split_fct"](state_clone, { "cv_rep": cv_rep }, log)
+                                        out = model_dict[model].apply(state_clone, options_hyper, log, start_at=hyper["break_at"], prefix=False)
+                                        target = hyper["target"](out)
+                                        target_out_tmp.append(target[1])
+                                        monitor = hyper["monitor"](out)
+                                        monitor_out_tmp.append(monitor[1])
+                                        #print "CV-rep %d" % cv_rep, target[0], target[1]
+                                        #raw_input('..')
+                                    target_avg = np.average(target_out_tmp)
+                                    target_out.append(target_avg)
+                                    monitor_out.append(np.average(monitor_out_tmp))
+                                    opt_hyper_tag = ""
+                                    for s in hyper["sweeps"]:
+                                        v = rmt.utils.dict_lookup_path(options_hyper, s[0])
+                                        v = v if type(v) not in [float, int] else "%+1.4e" % v
+                                        opt_hyper_tag += "{}={} ".format(s[0], v)
+                                    tags_out.append(opt_hyper_tag)
+                                    results_out.append(out)
+                                    log << "[hyper] {} {} {:+1.7e}   {} {:+1.7e}".format(opt_hyper_tag, monitor[0], monitor[1], target[0], target_avg) << log.endl
+                        else:
+                            raise NotImplementedError()
+                        idx = np.argmin(target_out)
+                        log << "[hyper] Optimum @ parameters: {} target: {}".format(tags_out[idx], target_out[idx]) << log.endl
+                        model_hyper = tags_out[idx]
+                        out = results_out[idx]
                     else:
-                        raise NotImplementedError()
-                    idx = np.argmin(target_out)
+                        log << "[hyper] Not running hyper-optimization as parameter grid consists of single point" << log.endl
+                        idx = 0
+                        model_hyper = "<single-point>"
                     options = options_hyper_set[idx]
-                    log << "[hyper] Optimum @ parameters: {} target: {}".format(tags_out[idx], target_out[idx]) << log.endl
-                    model_hyper = tags_out[idx]
-                    out = results_out[idx]
                     hyper_is_optimized = True
-                    if do_cv:
+                    if hyper["cv"]:
                         log << "[hyper] Using parameter set from hyper-optimization:" << model_hyper << log.endl
                         # Load state
                         state_clone = load_state(options_state)
@@ -230,7 +235,6 @@ def evaluate(
     if options_meta["filelog"]:
         json.dump(records, open(options_meta["filelog_name"], "w"), indent=1)
         json.dump(records, open(options_meta["fileout_name"], "w"), indent=1)
-
     return records
 
 def parse_records(

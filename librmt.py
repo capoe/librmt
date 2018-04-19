@@ -1029,8 +1029,12 @@ def random_forest_regression(state, options, log):
     rmse_test = (np.sum((T_test_pred-T_test)**2)/n_test)**0.5
     mae_train = np.sum(np.abs(T_train_pred-T_train))/n_train
     mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
-    spearmanr_train = scipy.stats.spearmanr(T_train_pred, T_train).correlation
-    spearmanr_test = scipy.stats.spearmanr(T_test_pred, T_test).correlation
+    if T_train.shape[0] > 1:
+        spearmanr_train = scipy.stats.spearmanr(T_train, T_train_pred).correlation
+    else: spearmanr_train = np.nan
+    if T_test.shape[0] > 1:
+        spearmanr_test = scipy.stats.spearmanr(T_test, T_test_pred).correlation
+    else: spearmanr_test = np.nan
     r2_fit = utils.r2_value_from_fit(T_test_pred, T_test)
     r2 = sklearn.metrics.r2_score(T_test, T_test_pred)
 
@@ -1096,8 +1100,12 @@ def learn(state, options, log, verbose=False):
     rmse_test = (np.sum((T_test_pred-T_test)**2)/n_test)**0.5
     mae_train = np.sum(np.abs(T_train_pred-T_train))/n_train
     mae_test = np.sum(np.abs(T_test_pred-T_test))/n_test
-    spearmanr_train = scipy.stats.spearmanr(T_train_pred, T_train).correlation
-    spearmanr_test = scipy.stats.spearmanr(T_test_pred, T_test).correlation
+    if T_train.shape[0] > 1:
+        spearmanr_train = scipy.stats.spearmanr(T_train, T_train_pred).correlation
+    else: spearmanr_train = np.nan
+    if T_test.shape[0] > 1:
+        spearmanr_test = scipy.stats.spearmanr(T_test, T_test_pred).correlation
+    else: spearmanr_test = np.nan
     r2_fit = utils.r2_value_from_fit(T_test_pred, T_test)
     r2 = sklearn.metrics.r2_score(T_test, T_test_pred)
     #np.savetxt('out.learn_train.txt', np.array([T_train, T_train_pred]).T)
@@ -1565,8 +1573,12 @@ def kernel_rr(state, options, log):
     rmse_test = rms_error(y_test, T_test)
     mae_train = np.sum(np.abs(y_train-T_train))/y_train.shape[0]
     mae_test = np.sum(np.abs(y_test-T_test))/y_test.shape[0]
-    spearmanr_train = scipy.stats.spearmanr(y_train, T_train).correlation
-    spearmanr_test = scipy.stats.spearmanr(y_test, T_test).correlation
+    if y_train.shape[0] > 1:
+        spearmanr_train = scipy.stats.spearmanr(y_train, T_train).correlation
+    else: spearmanr_train = np.nan
+    if y_test.shape[0] > 1:
+        spearmanr_test = scipy.stats.spearmanr(y_test, T_test).correlation
+    else: spearmanr_test = np.nan
     # Store
     out_train = np.array([y_train, T_train]).T
     out_test = np.array([y_test, T_test]).T
