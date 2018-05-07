@@ -1,5 +1,6 @@
 import numpy as np
 import copy
+import json
 
 def generate_orthonormal_vectors(N, d, seed=None): # number of vecs N, dimension d
     # Returns matrix, rows correspond to orthonormal vectors
@@ -146,6 +147,41 @@ def enable_latex(mpl, font_family='serif'):
 
 def mpl_eq(raw):
     return r"$\displaystyle "+raw+r" $"
+
+def jsonize(records, delete_keys=[]):
+    for r in records:
+        for key in r:
+            if key in delete_keys: r[key] = None
+            elif type(r[key]) in [ list, int, float, str, unicode ]: continue
+            elif type(r[key]) == np.ndarray:
+                r[key] = r[key].tolist()
+            elif type(r[key]) == np.float64:
+                r[key] = float(r[key])
+            else:
+                r[key] = str(type(r[key]))
+    return records
+
+def mpl_layout():
+    # Location examples
+    top_left     = [ 0.1, 0.5, 0.3, 0.3 ]
+    cb1          = [ 0.42, 0.5, 0.01, 0.3 ]
+    top_right    = [ 0.5, 0.5, 0.3, 0.3 ]
+    cb2          = [ 0.82, 0.5, 0.01, 0.3 ]
+    bottom_left  = [ 0.1, 0.1, 0.3, 0.3 ]
+    cb3          = [ 0.42, 0.1, 0.01, 0.3 ]
+    bottom_right = [ 0.5, 0.1, 0.3, 0.3 ]
+    cb4          = [ 0.82, 0.1, 0.01, 0.3 ]
+    # Colormap example
+    from matplotlib.colors import LinearSegmentedColormap
+    colors = ["#ff0066", "#ffffff", "#0066ff"]
+    colors.reverse()
+    cm = LinearSegmentedColormap.from_list(
+        "f06", colors, N=100)
+    return
+    
+
+
+
 
 
 

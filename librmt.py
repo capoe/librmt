@@ -32,6 +32,7 @@ try:
     raise ImportError
 except ImportError:
     from external import soap
+    log = soap.soapy.momo.osio
 try:
     #import ase.io as ase_io
     raise ImportError
