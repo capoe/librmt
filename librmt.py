@@ -420,8 +420,8 @@ def compute_descriptor_morgan(state, options, log):
     log << log.item << "Bit length:" << length << log.endl
     # SMILES to molecule
     log << "Generating molecules from smiles ..." << log.endl
-    for c in configs:
-        print c.info
+    #for c in configs:
+    #    print c.info
     smiles = [ config.info['smiles'] for config in configs ]
     mols = [chem.MolFromSmiles(c) for c in smiles]
     #for config, c in zip(configs, smiles):
@@ -831,6 +831,9 @@ def normalise_descriptor_zscore(state, options, log):
             X_std = np.std(IX_train, axis=0, ddof=1)
             log << "Mean min max:" << np.min(X_mean) << np.max(X_mean) << log.endl
             log << "Std  min max:" << np.min(X_std) << np.max(X_std) << log.endl
+            if "z" in options:
+                log << "Have z target:" << options["z"] << log.endl
+                X_std = utils.div0(X_std, options["z"])
             IX_train_norm = utils.div0(IX_train - X_mean, X_std)
             IX_test_norm = utils.div0(IX_test - X_mean, X_std)
             # Store
