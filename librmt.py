@@ -18,6 +18,7 @@ import labs as labs
 import utils as utils
 import launch as launch
 import hamiltonian as hamiltonian
+import npfga as npfga
 import sklearn.metrics
 from state import State
 from pipe import Pipe
