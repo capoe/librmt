@@ -315,7 +315,8 @@ class FNode(object):
             seq = seq + fnodes[p].calculateCovSequence(fnodes)
         return seq
     def __str__(self):
-        return "%-20s %-40s %+1.7e   P %s %s" % (self.tag, self.unit, self.coeff, self.parent_idcs, "+" if not self.maybe_neg else "+/-")
+        return "%-55s units=%-25s coeff=%+1.2e par=%10s %3s" % (
+            self.tag, self.uvec, self.coeff, self.parent_idcs, "+" if not self.maybe_neg else "+/-")
 
 class FGraph(object):
     def __init__(self, features, constants, conversions):
@@ -340,6 +341,30 @@ class FGraph(object):
             node = FNode(idx=len(fnodes), tag=tag, unit=f[0], coeff=f[2], convert=conversions, root=True, maybe_neg=True if f[1] == "+-" else "+")
             fnodes.append(node)
         return fnodes
+    def embedChildIdcs(self):
+        for fnode in self.fnodes:
+            fnode.child_idcs = []
+        for fnode in self.fnodes:
+            for pidx in fnode.parent_idcs:
+                self.fnodes[pidx].child_idcs.append(fnode.idx)
+        return
+    def mapGenerations(self):
+        root_nodes = filter(lambda f: f.root, self.fnodes)
+        for f in self.fnodes:
+            f.generation = -1
+        def assign_generation_recursive(fnode, fgraph, generation=0):
+            if fnode.generation <= generation:
+                fnode.generation = generation
+            for c in fnode.child_idcs:
+                assign_generation_recursive(fgraph.fnodes[c], fgraph, generation=generation+1)
+            return
+        for r in root_nodes:
+            assign_generation_recursive(r, self)
+        map_generations = {}
+        for f in self.fnodes:
+            if not f.generation in map_generations: map_generations[f.generation] = []
+            map_generations[f.generation].append(f)
+        return map_generations
     def truncate_strict(self, fnode_idcs, keep_input_nodes=True):
         len_in = len(self.fnodes)
         keep_idcs = { i: True for i in fnode_idcs }
@@ -570,6 +595,98 @@ def generate_fgraph(fgraph, uop_strings, bop_strings):
         fgraph.fnodes = fgraph.fnodes_in
     return fgraph
 
+def represent_graph_2d(fgraph):
+    fgraph = pickle.load(open(sys.argv[1], 'rb'))
+    fgraph.embedChildIdcs()
+    map_generations = fgraph.mapGenerations()
+    root_nodes = filter(lambda f: f.root, fgraph.fnodes)
+    # POSITION NODES
+    dphi_root = 2*np.pi/len(map_generations[0])
+    radius_root = 1.0
+    radius_scale = 2.5
+    for gen in range(len(map_generations)):
+        nodes = map_generations[gen]
+        print "GENERATION", gen
+        for idx, node in enumerate(nodes):
+            if gen == 0:
+                node.phi = idx*dphi_root
+                node.radius = radius_root
+                print node.phi, node.tag
+            elif len(node.parent_idcs) == 1:
+                # Unary case
+                pidx = node.parent_idcs[0]
+                # Positioning
+                node.phi = fgraph.fnodes[pidx].phi + (np.abs(node.cov*node.confidence))*dphi_root
+                node.radius = (1.+gen)**2*radius_root + radius_scale*(np.abs(node.cov*node.confidence))*radius_root
+            elif len(node.parent_idcs) == 2:
+                pidx1 = node.parent_idcs[0]
+                pidx2 = node.parent_idcs[1]
+                pidx_key = '%d_%d' % tuple(sorted(node.parent_idcs))
+                # Positioning
+                phi_parents = sorted([ fgraph.fnodes[pidx].phi for pidx in node.parent_idcs ])
+                dphi = phi_parents[1]-phi_parents[0]
+                if dphi <= np.pi:
+                    node.phi = phi_parents[0] + 0.5*dphi
+                else:
+                    node.phi = (phi_parents[1] + 0.5*(2*np.pi - dphi)) % (2*np.pi)
+                node.phi = node.phi + (np.abs(node.cov*node.confidence))*dphi_root
+                node.radius = (1.+gen)**2*radius_root + radius_scale*(np.abs(node.cov*node.confidence))*radius_root
+    # LINKS BETWEEN NODES
+    def connect_straight(f1, f2):
+        x1 = f1.radius*np.cos(f1.phi)
+        y1 = f1.radius*np.sin(f1.phi)
+        x2 = f2.radius*np.cos(f2.phi)
+        y2 = f2.radius*np.sin(f2.phi)
+        w = np.abs(f2.cov*f2.confidence)
+        return [ [x1,y1,w], [x2,y2,w] ]
+    def connect_arc(f0, f1, f2, samples=15):
+        x0 = f0.radius*np.cos(f0.phi)
+        y0 = f0.radius*np.sin(f0.phi)
+        x1 = f1.radius*np.cos(f1.phi)
+        y1 = f1.radius*np.sin(f1.phi)
+        x2 = f2.radius*np.cos(f2.phi)
+        y2 = f2.radius*np.sin(f2.phi)
+        w = np.abs(f2.cov*f2.confidence)
+        r1 = ((x1-x0)**2+(y1-y0)**2)**0.5
+        r2 = ((x2-x0)**2+(y2-y0)**2)**0.5
+        phi1 = np.arctan2(y1-y0, x1-x0)
+        phi2 = np.arctan2(y2-y0, x2-x0)
+        if phi1 < 0.: phi1 = 2*np.pi + phi1
+        if phi2 < 0.: phi2 = 2*np.pi + phi2
+        phi_start = phi1
+        dphi = phi2-phi1
+        if dphi >= np.pi:
+            dphi = 2*np.pi - dphi
+            phi_end = phi_start-dphi
+        elif dphi <= -np.pi:
+            dphi = 2*np.pi + dphi
+            phi_end = phi_start+dphi
+        else:
+            phi_end = phi_start + dphi
+        coords = []
+        for i in range(samples):
+            phi_i = phi_start + float(i)/(samples-1)*(phi_end-phi_start)
+            rad_i = r1 + float(i)/(samples-1)*(r2-r1)
+
+            x_i = x0 + rad_i*np.cos(phi_i)
+            y_i = y0 + rad_i*np.sin(phi_i)
+            coords.append([x_i, y_i, w])
+        return coords
+    curves = []
+    for fnode in fgraph.fnodes:
+        if len(fnode.parent_idcs) == 1:
+            pidx = fnode.parent_idcs[0]
+            curves.append(connect_straight(fgraph.fnodes[pidx], fnode))
+        elif len(fnode.parent_idcs) == 2:
+            pidx1 = fnode.parent_idcs[0]
+            pidx2 = fnode.parent_idcs[1]
+            curves.append(connect_arc(fgraph.fnodes[pidx1], fgraph.fnodes[pidx2], fnode))
+            curves.append(connect_arc(fgraph.fnodes[pidx2], fgraph.fnodes[pidx1], fnode))
+        else: pass
+    # Sort curves so important ones are in the foreground
+    curves = sorted(curves, key=lambda c: c[0][-1])
+    return fgraph, curves
+
 def filter_fgraph(fgraph, X_probe, x_tags):
     # Filter out feature channels with vanishing spread or nan's/inf's
     keep = []
@@ -590,6 +707,51 @@ def filter_fgraph(fgraph, X_probe, x_tags):
         log << log.my << "Truncating from %d to %d channels due to value range errors" % (len(fgraph.fnodes), len(keep)) << log.endl
     fgraph.truncate_strict(keep)
     return fgraph
+
+def trace_fgraph_weights(fgraph):
+    # Initialize
+    fgraph.embedChildIdcs()
+    for fnode in fgraph.fnodes:
+        fnode.weight = 0.0
+    root_nodes = filter(lambda f: f.root, fgraph.fnodes)
+    # Trace
+    def calculate_weight_recursive(fnode, fgraph, parent=None):
+        w_this = np.abs(fnode.cov*fnode.confidence)
+        n_parents = len(fnode.parent_idcs)
+        n_visited = 1
+        if n_parents == 0:
+            w_assign = w_this
+            print "ROOT @", fnode
+        elif n_parents == 1:
+            w_assign = w_this
+        elif n_parents == 2:
+            p1 = fgraph.fnodes[fnode.parent_idcs[0]]
+            p2 = fgraph.fnodes[fnode.parent_idcs[1]]
+            w1 = np.abs(p1.cov*p1.confidence)
+            w2 = np.abs(p2.cov*p2.confidence)
+            if parent.idx == p1.idx:
+                w_assign = w_this*w1/(w1+w2+1e-10)
+            elif parent.idx == p2.idx:
+                w_assign = w_this*w2/(w1+w2+1e-10)
+            else: raise RuntimeError("Recursion violated relationships")
+        else: raise ValueError("Too many parents")
+        for c in fnode.child_idcs:
+            w_assign_add, n_visited_add = calculate_weight_recursive(fgraph.fnodes[c], fgraph, parent=fnode)
+            w_assign += w_assign_add
+            n_visited += n_visited_add
+        return w_assign, n_visited
+    weight_sum_direct = 0.0
+    for f in fgraph.fnodes:
+        weight_sum_direct += np.abs(f.cov*f.confidence)
+    weight_sum_recursive = 0.0
+    for r in root_nodes:
+        weight, n_visited = calculate_weight_recursive(r, fgraph)
+        weight_sum_recursive += weight
+        r.weight = weight/n_visited
+    print "Weight sum through summation:", weight_sum_direct
+    print "Weight sum through recursion:", weight_sum_recursive
+    root_nodes = sorted(root_nodes, key=lambda r: -r.weight)
+    return root_nodes
 
 def apply_fgraph(state, options, log):
     # Load feature graph
