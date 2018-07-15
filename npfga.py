@@ -8,6 +8,7 @@ import scipy.stats
 import pickle
 import math
 log = utils.log
+npfga_dtype = 'float32'
 
 # ================
 # NOTES AND TODO's
@@ -135,14 +136,16 @@ class OLog(UOperator):
         self.tag = "log"
     def check(self, f1):
         ok = True
-        dimless = (np.sum(np.abs(f1.uvec)) < 1e-10)
-        if not dimless: ok = False
+        if f1.maybe_neg: ok = False
         else:
-            isexp = (f1.op.tag == "exp")
-            if isexp: ok = False
+            dimless = (np.sum(np.abs(f1.uvec)) < 1e-10)
+            if not dimless: ok = False
             else:
-                islog = (f1.op.tag == "log")
-                if islog: ok = False
+                isexp = (f1.op.tag == "exp")
+                if isexp: ok = False
+                else:
+                    islog = (f1.op.tag == "log")
+                    if islog: ok = False
         return ok
     def generate(self, f1):
         tag = r"\\ln(%s)" % f1.tag
@@ -299,7 +302,7 @@ class FNode(object):
         else:
             self.tag = "OP_"+self.op.tag+"(%s)" % (",".join([fnodes[_].calculateTag(fnodes) for _ in self.parent_idcs]))
             return self.tag
-    def calculateLatexExpr(self, fnodes, decode, format_string=r"$%s$"):
+    def calculateLatexExpr(self, fnodes, decode={}, format_string=r"$%s$"):
         if self.root:
             return format_string % (decode[self.tag] if self.tag in decode else self.tag)
         else:
@@ -459,7 +462,7 @@ class FGraph(object):
         print "Reduced from %d to %d feature nodes" % (len_in, len_out)
         return
     def apply(self, x_dict, verbose=False):
-        x_out = np.zeros((len(self.fnodes),), dtype='float32')
+        x_out = np.zeros((len(self.fnodes),), dtype=npfga_dtype)
         checklist = np.zeros((len(self.fnodes),), dtype='bool')
         for idx, f in enumerate(self.fnodes_in):
             xi = f.seed(x_dict[f.tag])
@@ -477,7 +480,7 @@ class FGraph(object):
     def formatSeedDescriptors(self, IX, x_tags):
         # Add constants to input descriptor matrix
         c_tags = sorted([ t for t in self.constants ])
-        IC_const = np.ones((IX.shape[0], len(c_tags)), dtype='float32')
+        IC_const = np.ones((IX.shape[0], len(c_tags)), dtype=npfga_dtype)
         if len(c_tags):
             print "Added %d constants to descriptor matrix" % len(c_tags)
         x_tags = list(x_tags) + c_tags
@@ -488,7 +491,7 @@ class FGraph(object):
     def applyMatrix(self, IX, x_tags, verbose=False):
         IX, x_tags, x_tag_to_idx = self.formatSeedDescriptors(IX, x_tags)
         # Allocate output array and feature checklist
-        IX_out = np.zeros((IX.shape[0], len(self.fnodes)), dtype='float32')
+        IX_out = np.zeros((IX.shape[0], len(self.fnodes)), dtype=npfga_dtype)
         x_tag_to_idx = { t: i for i, t, in enumerate(x_tags) }
         checklist = np.zeros((len(self.fnodes),), dtype='bool')
         # Seed root features
@@ -891,8 +894,8 @@ def sis_alt(IX_up, y,
         y_order = np.argsort(y_norm)
         ranks = np.arange(y_order.shape[0])
         # Convert variables to rank 
-        ix_tf = np.zeros(IX_up.shape, dtype='float32')
-        y_tf = np.zeros(y_norm.shape, dtype='float32')
+        ix_tf = np.zeros(IX_up.shape, dtype=npfga_dtype)
+        y_tf = np.zeros(y_norm.shape, dtype=npfga_dtype)
         for ii in range(IX_up.shape[1]):
             ix_tf[ix_order[:,ii],ii] = ranks
         y_tf[y_order] = ranks
@@ -910,8 +913,8 @@ def sis_alt(IX_up, y,
         y_order = np.argsort(y_norm)
         ranks = np.arange(y_order.shape[0])
         # Convert variables to rank
-        ix_tf = np.zeros(IX_up.shape, dtype='float32')
-        y_tf = np.zeros(y_norm.shape, dtype='float32')
+        ix_tf = np.zeros(IX_up.shape, dtype=npfga_dtype)
+        y_tf = np.zeros(y_norm.shape, dtype=npfga_dtype)
         for ii in range(IX_up.shape[1]):
             ix_tf[ix_order[:,ii],ii] = ranks
         y_tf[y_order] = ranks
@@ -1144,7 +1147,7 @@ def cedf_analysis(xt, Ct, f_tail, ff_tail, fileout=False, cedf_type='gpd', verbo
 
 def calculate_null_distribution(fgraph, rand_IX_list, rand_IX_tags, rand_Y, options):
     # Null distribution for covariance (as measured across random-feature ensemble)
-    rand_covs = np.zeros((len(rand_IX_list), len(fgraph.fnodes)), dtype='float32')
+    rand_covs = np.zeros((len(rand_IX_list), len(fgraph.fnodes)), dtype=npfga_dtype)
     for i, rand_IX in enumerate(rand_IX_list):
         log << log.back << "Randomized control, instance" << i << log.flush
         rand_IX_up = fgraph.applyMatrix(rand_IX, rand_IX_tags[0], verbose=False)
@@ -1159,7 +1162,7 @@ def calculate_null_distribution(fgraph, rand_IX_list, rand_IX_tags, rand_Y, opti
         rand_covs[i,:] = r_covs
     log << log.endl
 
-    file_out = True
+    file_out = False
     p_threshold = 1. - options.tail_fraction
     n_channels = len(fgraph.fnodes)
     n_samples = rand_covs.shape[0]
@@ -1175,7 +1178,7 @@ def calculate_null_distribution(fgraph, rand_IX_list, rand_IX_tags, rand_Y, opti
     rand_covs = np.abs(rand_covs)
     rand_covs = np.sort(rand_covs, axis=0)
     # Cumulative distribution for each channel
-    rand_cum = np.ones((n_samples,1), dtype='float32')
+    rand_cum = np.ones((n_samples,1), dtype=npfga_dtype)
     rand_cum = np.cumsum(rand_cum, axis=0)
     rand_cum = (rand_cum-0.5) / rand_cum[-1,0]
     rand_cum = rand_cum[::-1,:]
@@ -1191,7 +1194,7 @@ def calculate_null_distribution(fgraph, rand_IX_list, rand_IX_tags, rand_Y, opti
     # Peaks over threshold: calculate excesses for random samples
     log << "Calculating excess for random samples" << log.endl
     pots = rand_covs[i_threshold:n_samples,:]
-    rand_exs_mat = np.zeros((n_samples,n_channels), dtype='float32')
+    rand_exs_mat = np.zeros((n_samples,n_channels), dtype=npfga_dtype)
     for s in range(n_samples):
         log << log.back << "- Sample %d/%d" % (s+1, n_samples) << log.flush
         rand_cov_sample = rand_cov_mat[s]
@@ -1199,7 +1202,7 @@ def calculate_null_distribution(fgraph, rand_IX_list, rand_IX_tags, rand_Y, opti
         rand_exs_mat[s,:] = exs
     # Random excess distributions
     rand_exs = np.sort(rand_exs_mat, axis=1) # n_samples x n_channels
-    rand_exs_cum = np.ones((n_channels,1), dtype='float32') # n_channels x 1
+    rand_exs_cum = np.ones((n_channels,1), dtype=npfga_dtype) # n_channels x 1
     rand_exs_cum = np.cumsum(rand_exs_cum, axis=0)
     rand_exs_cum = (rand_exs_cum-0.5) / rand_exs_cum[-1,0]
     rand_exs_cum = rand_exs_cum[::-1,:]
@@ -1208,7 +1211,7 @@ def calculate_null_distribution(fgraph, rand_IX_list, rand_IX_tags, rand_Y, opti
     # Rank distributions
     rand_exs_rank = np.sort(rand_exs, axis=0) # n_samples x n_channels
     rand_exs_rank = rand_exs_rank[:,::-1]
-    rand_exs_rank_cum = np.ones((n_samples,1), dtype='float32') # n_channels x 1
+    rand_exs_rank_cum = np.ones((n_samples,1), dtype=npfga_dtype) # n_channels x 1
     rand_exs_rank_cum = np.cumsum(rand_exs_rank_cum, axis=0)
     rand_exs_rank_cum = (rand_exs_rank_cum-0.5) / rand_exs_rank_cum[-1,0]
     rand_exs_rank_cum = rand_exs_rank_cum[::-1,:]

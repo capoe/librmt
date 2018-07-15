@@ -33,9 +33,9 @@ def binomial_coeff(n, k):
         b *= (n+1-i)/i
     return b
 
-def zscore(IX):
+def zscore(IX, ddof=0):
     X_mean = np.mean(IX, axis=0)
-    X_std = np.std(IX, axis=0, ddof=1)
+    X_std = np.std(IX, axis=0, ddof=ddof)
     return div0(IX-X_mean, X_std), X_mean, X_std
 
 def apply_zscore(IX, X_mean, X_std):
