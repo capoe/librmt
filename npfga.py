@@ -6,6 +6,7 @@ import sys
 import scipy.optimize
 import scipy.stats
 import pickle
+import math
 log = utils.log
 
 # ================
@@ -40,6 +41,8 @@ class OIdentity(UOperator):
         assert False
     def apply(self, v1):
         return True
+    def latex(self, args, priorities):
+        return args[0]
 
 class OPlus(BOperator):
     def __init__(self):
@@ -48,11 +51,13 @@ class OPlus(BOperator):
         matches = (np.sum(np.abs(f1.uvec - f2.uvec)) < 1e-10)
         return matches
     def generate(self, f1, f2):
-        tag = r"%s + %s" % (f1.tag, f2.tag)
+        tag = r"%s+%s" % (f1.tag, f2.tag)
         maybe_neg = (f1.maybe_neg or f2.maybe_neg)
         return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=maybe_neg)
     def apply(self, v1, v2):
         return v1+v2
+    def latex(self, args, priorities):
+        return r"%s+%s" % tuple(args)
 
 class OMinus(BOperator):
     def __init__(self):
@@ -65,6 +70,8 @@ class OMinus(BOperator):
         return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=True)
     def apply(self, v1, v2):
         return v1-v2
+    def latex(self, args, priorities):
+        return r"%s-%s" % tuple(args)
 
 class OMult(BOperator):
     def __init__(self):
@@ -80,6 +87,12 @@ class OMult(BOperator):
         return FNode(idx=-1, tag=tag, uvec=f1.uvec+f2.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=maybe_neg)
     def apply(self, v1, v2):
         return v1*v2
+    def latex(self, args, priorities):
+        if op_priority[self.tag] < priorities[0]:
+            args[0] = "(%s)" % args[0]
+        if op_priority[self.tag] < priorities[1]:
+            args[1] = "(%s)" % args[1]
+        return r"%s\\,%s" % tuple(args)
 
 class ODiv(BOperator):
     def __init__(self):
@@ -87,11 +100,13 @@ class ODiv(BOperator):
     def check(self, f1, f2):
         return True
     def generate(self, f1, f2):
-        tag = r"\frac{%s}{%s}" % (f1.tag, f2.tag)
+        tag = r"\\frac{%s}{%s}" % (f1.tag, f2.tag)
         maybe_neg = (f1.maybe_neg or f2.maybe_neg)
         return FNode(idx=-1, tag=tag, uvec=f1.uvec-f2.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=maybe_neg)
     def apply(self, v1, v2):
         return v1/v2
+    def latex(self, args, priorities):
+        return r"\\frac{%s}{%s}" % tuple(args)
 
 class OExp(UOperator):
     def __init__(self):
@@ -108,10 +123,12 @@ class OExp(UOperator):
                 if islog: ok = False
         return ok
     def generate(self, f1):
-        tag = r"\exp(%s)" % f1.tag
+        tag = r"\\exp(%s)" % f1.tag
         return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
     def apply(self, v1):
         return np.exp(v1)
+    def latex(self, args, priorities):
+        return r"\\exp(%s)" % tuple(args)
 
 class OLog(UOperator):
     def __init__(self):
@@ -128,10 +145,12 @@ class OLog(UOperator):
                 if islog: ok = False
         return ok
     def generate(self, f1):
-        tag = r"\log(%s)" % f1.tag
+        tag = r"\\ln(%s)" % f1.tag
         return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=True)
     def apply(self, v1):
         return np.log(v1)
+    def latex(self, args, priorities):
+        return r"\\ln(%s)" % tuple(args)
 
 class OMod(UOperator):
     def __init__(self):
@@ -143,6 +162,8 @@ class OMod(UOperator):
         return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
     def apply(self, v1):
         return np.abs(v1)
+    def latex(self, args, priorities):
+        return r"|%s|" % tuple(args)
 
 class OSqrt(UOperator):
     def __init__(self):
@@ -154,10 +175,12 @@ class OSqrt(UOperator):
         else: pass
         return ok
     def generate(self, f1):
-        tag = r"\sqrt{%s}" % f1.tag
+        tag = r"\\sqrt{%s}" % f1.tag
         return FNode(idx=-1, tag=tag, uvec=0.5*f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
     def apply(self, v1):
         return np.sqrt(v1)
+    def latex(self, args, priorities):
+        return r"\\sqrt{%s}" % tuple(args)
 
 class OInv(UOperator):
     def __init__(self):
@@ -171,6 +194,10 @@ class OInv(UOperator):
         return FNode(idx=-1, tag=tag, uvec=-f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=f1.maybe_neg)
     def apply(self, v1):
         return 1./v1
+    def latex(self, args, priorities):
+        if priorities[0] > op_priority[self.tag]:
+            args[0] = "(%s)" % args[0]
+        return r"%s^{-1}" % tuple(args)
 
 class O2(UOperator):
     def __init__(self):
@@ -184,6 +211,10 @@ class O2(UOperator):
         return FNode(idx=-1, tag=tag, uvec=2*f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
     def apply(self, v1):
         return v1**2
+    def latex(self, args, priorities):
+        if priorities[0] > op_priority[self.tag]:
+            args[0] = "(%s)" % args[0]
+        return r"%s^2" % tuple(args)
 
 bop_map = {
     "+": OPlus(),
@@ -199,6 +230,20 @@ uop_map = {
     "s": OSqrt(),
     "r": OInv(),
     "2": O2(),
+}
+
+op_priority = {
+    "I":0,
+    "x":1,
+    ":":1,
+    "+":2,
+    "-":2, 
+    "exp":0,
+    "log":0, 
+    "|":0, 
+    "^1/2":1, 
+    "^-1":1,
+    "^2":1,
 }
 
 # ============
@@ -254,6 +299,14 @@ class FNode(object):
         else:
             self.tag = "OP_"+self.op.tag+"(%s)" % (",".join([fnodes[_].calculateTag(fnodes) for _ in self.parent_idcs]))
             return self.tag
+    def calculateLatexExpr(self, fnodes, decode, format_string=r"$%s$"):
+        if self.root:
+            return format_string % (decode[self.tag] if self.tag in decode else self.tag)
+        else:
+            args = [ fnodes[i].calculateLatexExpr(
+                fnodes, decode, format_string=r"%s") for i in self.parent_idcs ]
+            priorities = [ op_priority[fnodes[i].op.tag] for i in self.parent_idcs ]
+            return format_string % self.op.latex(args, priorities)
     def applyMatrixRecursive(self, IX, x_tag_to_idx, fnodes):
         if self.root:
             return self.coeff*IX[:, x_tag_to_idx[self.tag]]
@@ -708,7 +761,10 @@ def filter_fgraph(fgraph, X_probe, x_tags):
     fgraph.truncate_strict(keep)
     return fgraph
 
-def trace_fgraph_weights(fgraph):
+def trace_fgraph_weights(fgraph, assign_mode="weighted"):
+    """
+    Embeds fnode.weight member in FNodes
+    """
     # Initialize
     fgraph.embedChildIdcs()
     for fnode in fgraph.fnodes:
@@ -719,21 +775,26 @@ def trace_fgraph_weights(fgraph):
         w_this = np.abs(fnode.cov*fnode.confidence)
         n_parents = len(fnode.parent_idcs)
         n_visited = 1
-        if n_parents == 0:
-            w_assign = w_this
+        if fnode.root:
             print "ROOT @", fnode
+        if n_parents == 0 or parent == None:
+            w_assign = w_this
         elif n_parents == 1:
             w_assign = w_this
         elif n_parents == 2:
-            p1 = fgraph.fnodes[fnode.parent_idcs[0]]
-            p2 = fgraph.fnodes[fnode.parent_idcs[1]]
-            w1 = np.abs(p1.cov*p1.confidence)
-            w2 = np.abs(p2.cov*p2.confidence)
-            if parent.idx == p1.idx:
-                w_assign = w_this*w1/(w1+w2+1e-10)
-            elif parent.idx == p2.idx:
-                w_assign = w_this*w2/(w1+w2+1e-10)
-            else: raise RuntimeError("Recursion violated relationships")
+            if assign_mode == "weighted":
+                p1 = fgraph.fnodes[fnode.parent_idcs[0]]
+                p2 = fgraph.fnodes[fnode.parent_idcs[1]]
+                w1 = np.abs(p1.cov*p1.confidence)
+                w2 = np.abs(p2.cov*p2.confidence)
+                if parent.idx == p1.idx:
+                    w_assign = w_this*w1/(w1+w2+1e-10)
+                elif parent.idx == p2.idx:
+                    w_assign = w_this*w2/(w1+w2+1e-10)
+                else: raise RuntimeError("Recursion violated relationships")
+            elif assign_mode == "equal":
+                w_assign = w_this*0.5
+            else: raise ValueError(assign_mode)
         else: raise ValueError("Too many parents")
         for c in fnode.child_idcs:
             w_assign_add, n_visited_add = calculate_weight_recursive(fgraph.fnodes[c], fgraph, parent=fnode)
@@ -752,6 +813,28 @@ def trace_fgraph_weights(fgraph):
     print "Weight sum through recursion:", weight_sum_recursive
     root_nodes = sorted(root_nodes, key=lambda r: -r.weight)
     return root_nodes
+
+def rank_fgraph(fgraph, p_threshold=0.85):
+    """
+    Embeds fnode.rank member in FNodes
+    """
+    for fnode in fgraph.fnodes:
+        if fnode.root:
+            deps = [ fnode ]
+        else:
+            deps = fnode.getDependencies(fgraph.fnodes)
+            deps = [ fgraph.fnodes[d] for d in deps ]
+            deps = filter(lambda f: f.root, deps)
+        w = 1.0
+        for d in deps: w *= d.weight
+        w = w**(1./len(deps))
+        #w *= math.factorial(len(deps))
+        if fnode.confidence < p_threshold:
+            fnode.rank = 0.0
+        else:
+            fnode.rank = np.abs(fnode.cov*fnode.confidence)*w
+    ranked = filter(lambda f: f.rank > 1e-10, fgraph.fnodes)
+    return sorted(ranked, key=lambda f: -f.rank)
 
 def apply_fgraph(state, options, log):
     # Load feature graph

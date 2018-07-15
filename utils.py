@@ -112,6 +112,18 @@ def color_interpolate(c1, c2, f):
     b = int(b1 + (b2-b1)*f + 0.5)
     return color_int_to_hex(r, g, b)
 
+def color_palette(n_samples, colors, fractions):
+    colors_out = []
+    sample_fractions = [ float(i)/(n_samples-1) for i in range(n_samples) ]
+    cidx = 1
+    for f_sample in sample_fractions:
+        if fractions[cidx] < f_sample: cidx += 1
+        c1 = colors[cidx-1]
+        c2 = colors[cidx]
+        f12 = (fractions[cidx] - f_sample)/(fractions[cidx]-fractions[cidx-1])
+        colors_out.append(color_interpolate(c1, c2, f12))
+    return colors_out
+
 def plot_gp_semilogx(mat, x, y, 
         lt='-', lw=1.0, lcol='#333333', 
         mt='o', ms=3.0, mcol='#999999', medgecol='#333333', mlw=2.0, 
