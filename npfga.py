@@ -7,6 +7,8 @@ import scipy.optimize
 import scipy.stats
 import pickle
 import math
+from npfga_cas import *
+from npfga_ops import *
 log = utils.log
 npfga_dtype = 'float32'
 
@@ -21,233 +23,6 @@ npfga_dtype = 'float32'
 # - IR FREQUENCY   cm^-1 = 0.000124 eV
 # - THERMAL ENERGY beta = 0.0256 eV at room temperature as we are all aware
 
-# =========
-# OPERATORS
-# =========
-
-class BOperator(object):
-    def __init__(self):
-        pass
-
-class UOperator(object):
-    def __init__(self):
-        pass
-
-class OIdentity(UOperator):
-    def __init__(self):
-        self.tag = "I"
-    def check(self, f1):
-        return True
-    def generate(self, f1):
-        assert False
-    def apply(self, v1):
-        return True
-    def latex(self, args, priorities):
-        return args[0]
-
-class OPlus(BOperator):
-    def __init__(self):
-        self.tag = "+"
-    def check(self, f1, f2):
-        matches = (np.sum(np.abs(f1.uvec - f2.uvec)) < 1e-10)
-        return matches
-    def generate(self, f1, f2):
-        tag = r"%s+%s" % (f1.tag, f2.tag)
-        maybe_neg = (f1.maybe_neg or f2.maybe_neg)
-        return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=maybe_neg)
-    def apply(self, v1, v2):
-        return v1+v2
-    def latex(self, args, priorities):
-        return r"%s+%s" % tuple(args)
-
-class OMinus(BOperator):
-    def __init__(self):
-        self.tag = "-"
-    def check(self, f1, f2):
-        matches = (np.sum(np.abs(f1.uvec - f2.uvec)) < 1e-10)
-        return matches
-    def generate(self, f1, f2):
-        tag = r"%s - %s" % (f1.tag, f2.tag)
-        return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=True)
-    def apply(self, v1, v2):
-        return v1-v2
-    def latex(self, args, priorities):
-        return r"%s-%s" % tuple(args)
-
-class OMult(BOperator):
-    def __init__(self):
-        self.tag = "x"
-    def check(self, f1, f2):
-        return True
-    def generate(self, f1, f2):
-        tag = r"%s %s" % (f1.tag, f2.tag)
-        if (not f1.maybe_neg) and (not f2.maybe_neg):
-            maybe_neg = False
-        else:
-            maybe_neg = True
-        return FNode(idx=-1, tag=tag, uvec=f1.uvec+f2.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=maybe_neg)
-    def apply(self, v1, v2):
-        return v1*v2
-    def latex(self, args, priorities):
-        if op_priority[self.tag] < priorities[0]:
-            args[0] = "(%s)" % args[0]
-        if op_priority[self.tag] < priorities[1]:
-            args[1] = "(%s)" % args[1]
-        return r"%s\\,%s" % tuple(args)
-
-class ODiv(BOperator):
-    def __init__(self):
-        self.tag = ":"
-    def check(self, f1, f2):
-        return True
-    def generate(self, f1, f2):
-        tag = r"\\frac{%s}{%s}" % (f1.tag, f2.tag)
-        maybe_neg = (f1.maybe_neg or f2.maybe_neg)
-        return FNode(idx=-1, tag=tag, uvec=f1.uvec-f2.uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=self, maybe_neg=maybe_neg)
-    def apply(self, v1, v2):
-        return v1/v2
-    def latex(self, args, priorities):
-        return r"\\frac{%s}{%s}" % tuple(args)
-
-class OExp(UOperator):
-    def __init__(self):
-        self.tag = "exp"
-    def check(self, f1):
-        ok = True
-        dimless = (np.sum(np.abs(f1.uvec)) < 1e-10)
-        if not dimless: ok = False
-        else:
-            isexp = (f1.op.tag == "exp")
-            if isexp: ok = False
-            else:
-                islog = (f1.op.tag == "log")
-                if islog: ok = False
-        return ok
-    def generate(self, f1):
-        tag = r"\\exp(%s)" % f1.tag
-        return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
-    def apply(self, v1):
-        return np.exp(v1)
-    def latex(self, args, priorities):
-        return r"\\exp(%s)" % tuple(args)
-
-class OLog(UOperator):
-    def __init__(self):
-        self.tag = "log"
-    def check(self, f1):
-        ok = True
-        if f1.maybe_neg: ok = False
-        else:
-            dimless = (np.sum(np.abs(f1.uvec)) < 1e-10)
-            if not dimless: ok = False
-            else:
-                isexp = (f1.op.tag == "exp")
-                if isexp: ok = False
-                else:
-                    islog = (f1.op.tag == "log")
-                    if islog: ok = False
-        return ok
-    def generate(self, f1):
-        tag = r"\\ln(%s)" % f1.tag
-        return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=True)
-    def apply(self, v1):
-        return np.log(v1)
-    def latex(self, args, priorities):
-        return r"\\ln(%s)" % tuple(args)
-
-class OMod(UOperator):
-    def __init__(self):
-        self.tag = "|"
-    def check(self, f1):
-        return f1.maybe_neg
-    def generate(self, f1):
-        tag = r"|%s|" % f1.tag
-        return FNode(idx=-1, tag=tag, uvec=f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
-    def apply(self, v1):
-        return np.abs(v1)
-    def latex(self, args, priorities):
-        return r"|%s|" % tuple(args)
-
-class OSqrt(UOperator):
-    def __init__(self):
-        self.tag = "^1/2"
-    def check(self, f1):
-        ok = True
-        if f1.maybe_neg: ok = False
-        elif f1.op.tag == "^2": ok = False
-        else: pass
-        return ok
-    def generate(self, f1):
-        tag = r"\\sqrt{%s}" % f1.tag
-        return FNode(idx=-1, tag=tag, uvec=0.5*f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
-    def apply(self, v1):
-        return np.sqrt(v1)
-    def latex(self, args, priorities):
-        return r"\\sqrt{%s}" % tuple(args)
-
-class OInv(UOperator):
-    def __init__(self):
-        self.tag = "^-1"
-    def check(self, f1):
-        ok = True
-        if f1.op.tag == "^-1": ok = False
-        return ok
-    def generate(self, f1):
-        tag = r"(%s)^{-1}" % f1.tag
-        return FNode(idx=-1, tag=tag, uvec=-f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=f1.maybe_neg)
-    def apply(self, v1):
-        return 1./v1
-    def latex(self, args, priorities):
-        if priorities[0] > op_priority[self.tag]:
-            args[0] = "(%s)" % args[0]
-        return r"%s^{-1}" % tuple(args)
-
-class O2(UOperator):
-    def __init__(self):
-        self.tag = "^2"
-    def check(self, f1):
-        ok = True
-        if f1.op.tag == "^1/2": ok = False
-        return ok
-    def generate(self, f1):
-        tag = r"(%s)^2" % f1.tag
-        return FNode(idx=-1, tag=tag, uvec=2*f1.uvec, coeff=1.0, parent_idcs=[f1.idx], op=self, maybe_neg=False)
-    def apply(self, v1):
-        return v1**2
-    def latex(self, args, priorities):
-        if priorities[0] > op_priority[self.tag]:
-            args[0] = "(%s)" % args[0]
-        return r"%s^2" % tuple(args)
-
-bop_map = {
-    "+": OPlus(),
-    "-": OMinus(),
-    ":": ODiv(),
-    "*": OMult()
-}
-
-uop_map = {
-    "e": OExp(),
-    "l": OLog(),
-    "|": OMod(),
-    "s": OSqrt(),
-    "r": OInv(),
-    "2": O2(),
-}
-
-op_priority = {
-    "I":0,
-    "x":1,
-    ":":1,
-    "+":2,
-    "-":2, 
-    "exp":0,
-    "log":0, 
-    "|":0, 
-    "^1/2":1, 
-    "^-1":1,
-    "^2":1,
-}
 
 # ============
 # CORE OBJECTS
@@ -292,8 +67,42 @@ class FNode(object):
             deps.append(p)
             deps = deps + fnodes[p].getDependencies(fnodes)
         return deps
+    def getParents(self, fnodes):
+        if self.root: return []
+        else: return [ fnodes[p] for p in self.parent_idcs ]
     def seed(self, x):
         return self.coeff*x
+    def calculateInstruction(self, fnodes):
+        parents = self.getParents(fnodes)
+        if self.root:
+            self.instruction = [None, [self.tag, 1]]
+        elif len(parents) == 1:
+            if self.op.tag in "el|": # create new effective feature
+                self.instruction = [ self.op.tag, copy_instruction(parents[0].instruction) ]
+                self.instruction = [ None, [ stringify_instruction(self.instruction), 1 ] ] # TODO Fix
+            elif self.op.tag in "rs2":
+                powers = { "r": -1, "s": 0.5, "2": 2 }
+                self.instruction = take_instruction_to_power(copy_instruction(parents[0].instruction), powers[self.op.tag])
+            else: raise ValueError("Operator tag '%s' not recognized" % self.op.tag)
+        elif len(parents) == 2:
+            if self.op.tag in "+*":
+                op = self.op
+                args = [ copy_instruction(p.instruction) for p in parents ]
+                args = sorted(args, key=lambda a: a[1][0])
+            elif self.op.tag in ":":
+                op = bop_map["*"]
+                args = [ copy_instruction(parents[0].instruction), take_instruction_to_power(copy_instruction(parents[1].instruction), -1) ]
+                args = sorted(args, key=lambda a: a[1][0])
+            elif self.op.tag in "-":
+                op = self.op
+                args = [ copy_instruction(p.instruction) for p in parents ]
+            else: raise ValueError("Operator tag '%s' not recognized" % self.op.tag)
+            self.instruction = [ op.tag ] + args
+        else: raise RuntimeError("%d parents are too many" % len(parents))
+        self.instruction = simplify_instruction(self.instruction)
+        self.instruction_str = stringify_instruction(self.instruction)
+        elements = get_instruction_elements(self.instruction)
+        return self.instruction, elements
     def calculateTag(self, fnodes):
         if self.tag != "":
             return self.tag
@@ -404,6 +213,36 @@ class FGraph(object):
             for pidx in fnode.parent_idcs:
                 self.fnodes[pidx].child_idcs.append(fnode.idx)
         return
+    def purgeDuplicates(self):
+        log << log.mg << "Purging duplicates" << log.endl
+        self.embedChildIdcs()
+        gen_map = self.mapGenerations()
+        instruction_map = {}
+        log << "Calculating algebraic expressions" << log.endl
+        for gen in sorted(gen_map):
+            fnodes_gen = gen_map[gen]
+            for fnode in fnodes_gen:
+                instruction, elements = fnode.calculateInstruction(self.fnodes)
+                discard = False
+                if "1" in elements:
+                    print "[G%d]  [discard] %55s == %-30s" % (
+                        fnode.generation, fnode.calculateTag(self.fnodes), fnode.instruction_str)
+                else:
+                    if fnode.instruction_str not in instruction_map:
+                        instruction_map[fnode.instruction_str] = []
+                    instruction_map[fnode.instruction_str].append(fnode)
+                    print "[G%d]            %55s == %-30s" % (
+                        fnode.generation, fnode.calculateTag(self.fnodes), fnode.instruction_str)
+        log << "Removing duplicates" << log.endl
+        keep_idcs = []
+        for instruct_str, fnodes in instruction_map.iteritems():
+            if len(fnodes) > 1:
+                print "[G%d] [%d copies] %55s == %-30s" % (
+                    len(fnodes), fnode.generation, fnodes[0].calculateTag(self.fnodes), fnodes[0].instruction_str)
+                fnodes = sorted(fnodes, key=lambda f: len(f.calculateTag(self.fnodes)))
+            keep_idcs.append(fnodes[0].idx)
+        self.truncate_strict(keep_idcs)
+        return
     def mapGenerations(self):
         root_nodes = filter(lambda f: f.root, self.fnodes)
         for f in self.fnodes:
@@ -508,18 +347,18 @@ class FGraph(object):
             checklist[idx] = True
             if verbose: print f.calculateTag(self.fnodes), IX_out[0,idx]
         return IX_out
-    def generate(self, uops, bops, depth, max_exp=3, min_exp=0.4, verbose=False, halt=False):
+    def generate(self, uops, bops, depth, max_exp=3, min_exp=0.4, verbose=False, halt=False, purge=True):
         if len(self.fnodes) == 0:
             print "Starting from root nodes"
             self.fnodes = [ f for f in self.fnodes_in ]
         else:
             print "Starting from root+child nodes"
-        def check_in_unary(f, op):
+        def precheck_unary(f, op):
             if f.op.tag == op.tag: return False # Do not apply same unary operator twice
             return True
-        def check_in_binary(f1, f2, op):
+        def precheck_binary(f1, f2, op):
             return True
-        def check_out(f):
+        def postcheck(f):
             ok = True
             if f.uvec.shape[0] > 0:
                 if np.max(np.abs(f.uvec)) > max_exp: ok = False
@@ -539,13 +378,11 @@ class FGraph(object):
                 for op in uops:
                     f = self.fnodes[fidx]
                     add = False
-                    # Check generic, pre-op
-                    if check_in_unary(f, op):
-                        # Check op-specific
+                    if precheck_unary(f, op):
                         if op.check(f):
-                            f_new = op.generate(f)
-                            # Check generic, post-op
-                            if check_out(f_new):
+                            uvec, maybe_neg = op.generate(f)
+                            f_new = FNode(idx=-1, uvec=uvec, coeff=1.0, parent_idcs=[f.idx], op=op, maybe_neg=maybe_neg)
+                            if postcheck(f_new):
                                 add = True
                             else: pass
                         else: pass
@@ -580,13 +417,11 @@ class FGraph(object):
                     for f2idx in range(f1idx+1, len(self.fnodes)):
                         f2 = self.fnodes[f2idx]
                         add = False
-                        # Check generic, pre-application
-                        if check_in_binary(f1, f2, op):
-                            # Check op-specific
+                        if precheck_binary(f1, f2, op):
                             if op.check(f1, f2):
-                                f_new = op.generate(f1, f2)
-                                # Check generic, post-application
-                                if check_out(f_new):
+                                uvec, maybe_neg = op.generate(f1, f2)
+                                f_new = FNode(idx=-1, uvec=uvec, coeff=1.0, parent_idcs=[f1.idx, f2.idx], op=op, maybe_neg=maybe_neg)
+                                if postcheck(f_new):
                                     add = True
                                 else: pass
                             else: pass
@@ -604,6 +439,8 @@ class FGraph(object):
             print "... Generated %d features" % len(f_new_list)
             self.fnodes.extend(f_new_list)
             if halt: raw_input('...')
+        if purge:
+            self.purgeDuplicates()
         print "Generated a total of %d features" % (len(self.fnodes))
         return 
 
@@ -754,6 +591,7 @@ def filter_fgraph(fgraph, X_probe, x_tags):
             print "Value error(s) [inf] for channel '%s'" % fgraph.fnodes[cidx].calculateTag(fgraph.fnodes)
             ok = False
         else:
+            #print fgraph.fnodes[cidx].calculateTag(fgraph.fnodes), np.std(IX_up[:,cidx])
             has_spread = (np.std(IX_up[:,cidx]) > 1e-10)
             if not has_spread:
                 print "Value error(s) [std] for channel '%s'" % fgraph.fnodes[cidx].calculateTag(fgraph.fnodes)
