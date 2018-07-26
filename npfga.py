@@ -28,6 +28,34 @@ npfga_dtype = 'float32'
 # CORE OBJECTS
 # ============
 
+class FDimension(object):
+    def __init__(self, string, conversions):
+        self.umap = {}
+        self.prefactor = 1.0
+        for factor in string.split("*"):
+            self.addFactor(factor, conversions)
+    def addFactor(self, string, conversions):
+        factor = string.split("^")
+        if len(factor) == 1: factor.append("1")
+        name = factor[0]
+        exponent = float(factor[1])
+        if name == "":
+            pass
+        elif name in self.umap:
+            self.umap[name] += exponent
+        elif name in conversions:
+            self.prefactor = self.prefactor*conversions[name][0]**exponent
+            for u in conversions[name][1].split("*"):
+                self.addFactor(u, conversions)
+        else:
+            self.umap[name] = exponent
+    def stringify(self):
+        strings = []
+        names = sorted(self.umap)
+        for name in names:
+            strings.append("%s^%f" % (name, self.umap[name]))
+        return "*".join(strings)
+
 class FNode(object):
     def __init__(self, 
             idx, 
