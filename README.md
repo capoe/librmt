@@ -1,4 +1,6 @@
-# librmt
+<div align="center">
+    <img src="https://raw.githubusercontent.com/capoe/librmt/master/web/media/librmt.png" alt="logo"></img>
+</div>
 
 ### Installation
 ```bash
