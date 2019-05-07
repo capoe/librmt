@@ -115,14 +115,60 @@ def color_interpolate(c1, c2, f):
 def color_palette(n_samples, colors, fractions):
     colors_out = []
     sample_fractions = [ float(i)/(n_samples-1) for i in range(n_samples) ]
-    cidx = 1
+    cidx = 0
     for f_sample in sample_fractions:
         if fractions[cidx] < f_sample: cidx += 1
         c1 = colors[cidx-1]
         c2 = colors[cidx]
-        f12 = (fractions[cidx] - f_sample)/(fractions[cidx]-fractions[cidx-1])
+        f12 = 1-(fractions[cidx] - f_sample)/(fractions[cidx]-fractions[cidx-1])
         colors_out.append(color_interpolate(c1, c2, f12))
     return colors_out
+
+def make_cmap(n_steps, colors, fractions):
+    # >>> # Example:
+    # >>> cm0 = make_cmap(100, ["#fcfcfc", "#0066ff", "#ff00ff"], [ 0.0, 0.5, 1.0 ])
+    from matplotlib.colors import LinearSegmentedColormap
+    palette = color_palette(n_steps, colors, fractions)
+    palette_int = []
+    for p in palette: palette_int.append(color_hex_to_int(p))
+    palette_rgb = []
+    for p in palette_int:
+        rgb = [ p[0]/255., p[1]/255., p[2]/255. ]
+        palette_rgb.append(rgb)
+    colors = palette_rgb
+    cm = LinearSegmentedColormap.from_list(
+          'syn', colors, N=n_steps)
+    return cm
+
+def get_fig_axes_default(plt, w=1.0, h=1.0, dx=1.3, dy=1.3, scale=2.05):
+    enable_latex(plt)
+    fig, ax = make_fig_axes(plt, Nx=1, Ny=1, dx=dx, dy=dy, w=w, h=h, scale=scale)
+    return fig, ax[0][0]
+
+def make_fig_axes(plt, Nx, Ny, dx, dy, w, h, scale, x_shift={}, y_shift={}):
+    # >>> # Example:
+    # >>> fig, ax = make_fig_axes(plt, Nx=3, Ny=1, dx=1.5, dy=1.3, w=1.0, h=1.0, scale=2.2)
+    dx = scale*dx
+    dy = scale*dy
+    w = scale*w
+    h = scale*h
+    x_off = 0.5*(dx-w)
+    y_off = 0.5*(dy-h)
+    W = Nx*dx
+    H = Ny*dy
+    fig = plt.figure(figsize=(W,H))
+    axes = []
+    for i in range(Ny):
+        axes.append([])
+        for j in range(Nx):
+            if j*Ny+i in x_shift: x_shift_ij = x_shift[j*Ny+i]
+            else: x_shift_ij = 0
+            if j*Ny+i in y_shift: y_shift_ij = y_shift[j*Ny+i]
+            else: y_shift_ij = 0
+            ax = fig.add_axes([ (x_off+j*dx+x_shift_ij)/W, (i*dy+y_off+y_shift_ij)/H, w/W, h/H ])
+            ax.tick_params('both', direction='in')
+            axes[i].append(ax)
+    return fig, axes
 
 def plot_gp_semilogx(mat, x, y, 
         lt='-', lw=1.0, lcol='#333333', 
@@ -154,7 +200,10 @@ def plot_scatter(mat, x, y,
 def enable_latex(mpl, font_family='serif'):
     mpl.rcParams['text.usetex'] = True
     if font_family == 'sans-serif':
-        mpl.rcParams['text.latex.preamble'] = [r'\usepackage[cm]{sfmath}']
+        mpl.rcParams['text.latex.preamble'] = [
+            r'\usepackage[cm]{sfmath}',
+            r'\usepackage{amstext}'
+        ]
     mpl.rcParams['font.family'] = font_family
     mpl.rcParams['font.sans-serif'] = 'cm'
     return
